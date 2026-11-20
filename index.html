@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recurror — recursive symmetric spline drawing</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand"><span class="logo">✺</span> Recurror <span class="ver" id="ver"></span></div>
+  <div class="group">
+    <button data-act="new" title="New document">New</button>
+    <button data-act="open" title="Open .json (Ctrl+O)">Open</button>
+    <button data-act="save" title="Save .json (Ctrl+S)">Save</button>
+    <button data-act="demo" title="Load a demo drawing">Demo</button>
+  </div>
+  <div class="group">
+    <button data-act="undo" id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
+    <button data-act="redo" id="btnRedo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    <button data-act="fit" title="Fit view (F)">Fit</button>
+    <button data-act="clear" title="Remove all strokes on the active layer">Clear layer</button>
+  </div>
+  <div class="group">
+    <label class="inline" title="Snap to guides, centre and recursion anchors (S)"><input type="checkbox" data-bind="ui.snap"> Snap</label>
+    <label class="inline" title="Show symmetry guides (G)"><input type="checkbox" data-bind="ui.showGuides"> Guides</label>
+  </div>
+  <div class="group right">
+    <label class="inline">Scale
+      <select data-bind="ui.exportScale">
+        <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+      </select>
+    </label>
+    <label class="inline"><input type="checkbox" data-bind="ui.transparent"> Transparent</label>
+    <button data-act="export" class="primary" title="Export PNG (Ctrl+E)">Export PNG</button>
+  </div>
+  <input type="file" id="fileInput" accept=".json,application/json" hidden>
+</header>
+
+<main id="main">
+  <nav id="tools">
+    <button data-tool="draw" title="Freehand spline; tap to place connected points (B)">✎<small>Draw</small></button>
+    <button data-tool="pen" title="Pen: click control points, Enter/double-click to finish, click first point to close (P)">⌖<small>Pen</small></button>
+    <button data-tool="edit" title="Select / edit: click, Shift-click to add, drag on empty space to box-select; drag handles; Alt-click deletes a point; double-click inserts (V)">⬚<small>Edit</small></button>
+    <button data-tool="width" title="Width: drag a control point's ring to set its width; Alt-click resets (W)">◎<small>Width</small></button>
+    <button data-tool="center" title="Place symmetry centre (C)">⊕<small>Centre</small></button>
+    <button data-tool="pan" title="Pan (H, or hold Space)">✥<small>Pan</small></button>
+  </nav>
+
+  <section id="stage">
+    <canvas id="gl"></canvas>
+    <canvas id="overlay"></canvas>
+    <div id="glError" hidden></div>
+  </section>
+
+  <aside id="panel">
+    <details open>
+      <summary>Layers</summary>
+      <div id="layersList"></div>
+      <div class="btns">
+        <button data-act="layerAdd" title="New layer above the active one">＋ Layer</button>
+        <button data-act="layerUp" title="Move active layer up">▲</button>
+        <button data-act="layerDown" title="Move active layer down">▼</button>
+        <button data-act="layerDel" class="danger" title="Delete active layer and its strokes">Delete</button>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Symmetry</summary>
+      <div class="row"><label>Mode</label>
+        <select data-bind="sym.mode">
+          <option value="none">None</option>
+          <option value="mirror">Mirror</option>
+          <option value="rotate">Rotational</option>
+          <option value="kaleido">Kaleidoscope</option>
+          <option value="spiral">Spiral</option>
+          <option value="wallpaper">Wallpaper (17 groups)</option>
+          <option value="hyperbolic">Hyperbolic {p,q}</option>
+          <option value="inversion">Circle inversion</option>
+        </select></div>
+      <div class="row" data-show="sym.mode=rotate|kaleido|spiral"><label>Folds</label><input type="range" min="2" max="48" step="1" data-bind="sym.n"><output></output></div>
+      <div class="row" data-show="sym.mode=mirror|rotate|kaleido|spiral|hyperbolic|inversion"><label>Angle</label><input type="range" min="0" max="360" step="0.5" data-bind="sym.angle"><output></output></div>
+      <div class="row" data-show="sym.mode=spiral"><label>Ratio</label><input type="range" min="0.5" max="1.15" step="0.005" data-bind="sym.ratio"><output></output></div>
+      <div class="row" data-show="sym.mode=spiral"><label>Steps</label><input type="range" min="2" max="300" step="1" data-bind="sym.steps"><output></output></div>
+
+      <div class="row" data-show="sym.mode=wallpaper"><label>Group</label>
+        <select data-bind="sym.wp">
+          <optgroup label="Oblique"><option value="p1">p1 · translations</option><option value="p2">p2 · 2-fold</option></optgroup>
+          <optgroup label="Rectangular"><option value="pm">pm · mirrors</option><option value="pg">pg · glides</option><option value="cm">cm · mirror + glide</option>
+            <option value="pmm">pmm · 2 mirror sets</option><option value="pmg">pmg · mirror + glide</option><option value="pgg">pgg · 2 glide sets</option><option value="cmm">cmm · centred mirrors</option></optgroup>
+          <optgroup label="Square"><option value="p4">p4 · 4-fold</option><option value="p4m">p4m · 4-fold + mirrors</option><option value="p4g">p4g · 4-fold + glides</option></optgroup>
+          <optgroup label="Hexagonal"><option value="p3">p3 · 3-fold</option><option value="p3m1">p3m1 · 3-fold, mirrors through centres</option><option value="p31m">p31m · 3-fold, mirrors off-centre</option>
+            <option value="p6">p6 · 6-fold</option><option value="p6m">p6m · 6-fold + mirrors</option></optgroup>
+        </select></div>
+      <div class="row" data-show="sym.mode=wallpaper"><label>Cell size</label><input type="range" min="24" max="1024" step="1" data-bind="sym.tileDX"><output></output></div>
+      <div class="row" data-show="sym.mode=wallpaper&sym.wp=p1|p2|pm|pg|cm|pmm|pmg|pgg|cmm"><label>Cell height</label><input type="range" min="24" max="1024" step="1" data-bind="sym.tileDY"><output></output></div>
+      <div class="row" data-show="sym.mode=wallpaper&sym.wp=p1|p2"><label>Cell angle</label><input type="range" min="30" max="150" step="0.5" data-bind="sym.cellAngle"><output></output></div>
+
+      <div class="row" data-show="sym.mode=hyperbolic"><label>p (polygon)</label><input type="range" min="3" max="12" step="1" data-bind="sym.hp"><output></output></div>
+      <div class="row" data-show="sym.mode=hyperbolic"><label>q (meeting)</label><input type="range" min="3" max="12" step="1" data-bind="sym.hq"><output></output></div>
+      <div class="row" data-show="sym.mode=hyperbolic"><label>Disk radius</label><input type="range" min="60" max="2400" step="1" data-bind="sym.hR"><output></output></div>
+      <div class="row" data-show="sym.mode=hyperbolic"><label>Depth</label><input type="range" min="2" max="120" step="1" data-bind="sym.hDepth"><output></output></div>
+      <div class="row" data-show="sym.mode=hyperbolic"><label title="Off = rotations only (chiral, like Circle Limit III)">Reflections</label><input type="checkbox" data-bind="sym.hRefl"></div>
+
+      <div class="row" data-show="sym.mode=inversion"><label>Circles</label><input type="range" min="1" max="12" step="1" data-bind="sym.invK"><output></output></div>
+      <div class="row" data-show="sym.mode=inversion"><label>Ring radius</label><input type="range" min="0" max="1500" step="1" data-bind="sym.invD"><output></output></div>
+      <div class="row" data-show="sym.mode=inversion"><label>Circle radius</label><input type="range" min="10" max="1500" step="1" data-bind="sym.invR"><output></output></div>
+      <div class="row" data-show="sym.mode=inversion"><label>Hub radius</label><input type="range" min="0" max="1500" step="1" data-bind="sym.invHub"><output></output></div>
+      <div class="row" data-show="sym.mode=inversion"><label>Depth</label><input type="range" min="1" max="6" step="1" data-bind="sym.invDepth"><output></output></div>
+      <div class="row" data-show="sym.mode=inversion"><label title="Also rotate copies around the ring, so the figure keeps the ring's symmetry">Rotate with ring</label><input type="checkbox" data-bind="sym.invRing"></div>
+      <p class="hint" id="symInfo"></p>
+      <div class="btns">
+        <button data-act="centerArt">Centre on artboard</button>
+        <button data-act="symAll" title="Apply symmetry, recursion and warp to every stroke">Apply to all</button>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Recursion</summary>
+      <div class="row"><label>Mode</label>
+        <select data-bind="rec.mode">
+          <option value="off">Off</option>
+          <option value="nest">Nest (inside itself)</option>
+          <option value="branch">Branch (fractal)</option>
+        </select></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Depth</label><input type="range" min="1" max="8" step="1" data-bind="rec.depth"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Scale</label><input type="range" min="0.05" max="1.2" step="0.005" data-bind="rec.scale"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Offset</label><input type="range" min="0" max="1500" step="1" data-bind="rec.offset"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Direction</label><input type="range" min="0" max="360" step="0.5" data-bind="rec.angle"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Twist</label><input type="range" min="-180" max="180" step="0.5" data-bind="rec.twist"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Fade</label><input type="range" min="0" max="1" step="0.01" data-bind="rec.fade"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Hue shift</label><input type="range" min="-180" max="180" step="1" data-bind="rec.hue"><output></output></div>
+      <div class="row" data-show="rec.mode=nest|branch"><label>Layering</label>
+        <select data-bind="rec.layer">
+          <option value="mixed">Interleaved</option>
+          <option value="above">Children on top</option>
+          <option value="below">Children beneath</option>
+        </select></div>
+      <p class="hint" id="recInfo"></p>
+    </details>
+
+    <details open>
+      <summary>Warp <span class="hint">(applied to every copy)</span></summary>
+      <div class="row"><label>Warp</label><select data-bind="warp.type" id="warpType"></select></div>
+      <div class="row" data-show="warp.type=swirl|twirl|spherical|bubble|eyefish|sinusoidal|horseshoe|waves|cylinder|power|ripple|pinch"><label>Amount</label><input type="range" min="0" max="1" step="0.01" data-bind="warp.amount"><output></output></div>
+      <div class="row" data-show="warp.type=swirl|twirl|spherical|bubble|eyefish|sinusoidal|horseshoe|waves|cylinder|power|ripple|pinch"><label>Scale</label><input type="range" min="20" max="2400" step="1" data-bind="warp.scale"><output></output></div>
+      <div class="row" data-show="warp.type=swirl|twirl|spherical|bubble|eyefish|sinusoidal|horseshoe|waves|cylinder|power|ripple|pinch"><label>Strength</label><input type="range" min="-4" max="6" step="0.01" data-bind="warp.strength"><output></output></div>
+    </details>
+
+    <details open>
+      <summary>Spline</summary>
+      <div class="row"><label>Type</label>
+        <select data-bind="shape.spline">
+          <option value="catmull">Catmull-Rom (through points)</option>
+          <option value="bspline">B-spline (smooth)</option>
+          <option value="linear">Polyline</option>
+        </select></div>
+      <div class="row"><label>Closed</label><input type="checkbox" data-bind="shape.closed"></div>
+      <div class="row"><label title="In the Draw tool, a quick tap places a point and connects it to the previous one; dragging still draws freehand">Tap points</label><input type="checkbox" data-bind="ui.tapPoints"></div>
+      <div class="row"><label title="Starting or ending on an open stroke's end continues that stroke (bridges two, or closes a loop) instead of making a new one">Join ends</label><input type="checkbox" data-bind="ui.joinEnds"></div>
+      <div class="row"><label title="Separate strokes whose ends touch share one continuous gradient, keep full width and show no cap at the join">Blend touching ends</label><input type="checkbox" data-bind="doc.blendEnds"></div>
+      <div class="row"><label>Simplify</label><input type="range" min="0" max="12" step="0.1" data-bind="ui.smooth"><output></output></div>
+      <div class="row"><label>Stabilise</label><input type="range" min="0" max="0.95" step="0.01" data-bind="ui.stabilize"><output></output></div>
+    </details>
+
+    <details open>
+      <summary>Stroke</summary>
+      <div class="row"><label>Preset</label><select id="preset"><option value="">—</option></select></div>
+      <div class="row"><label>Shading</label>
+        <select data-bind="style.mode">
+          <option value="none">None (fill only)</option>
+          <option value="flat">Flat</option>
+          <option value="tube">Tube</option>
+          <option value="ribbon">Twisting ribbon</option>
+          <option value="bevel">Bevel</option>
+          <option value="chrome">Chrome</option>
+          <option value="engrave">Engraved hatch</option>
+          <option value="airbrush">Airbrush</option>
+          <option value="glow">Glow (additive)</option>
+          <option value="neon">Neon (additive)</option>
+        </select></div>
+      <div class="row"><label>Width</label><input type="range" min="0.5" max="200" step="0.5" data-bind="style.width"><output></output></div>
+      <div class="row"><label>Colour A</label><input type="color" data-bind="style.colA"></div>
+      <div class="row"><label>Colour B</label><input type="color" data-bind="style.colB"></div>
+      <div class="row"><label>Gradient</label>
+        <select data-bind="style.grad">
+          <option value="none">None (A)</option>
+          <option value="along">Along stroke</option>
+          <option value="across">Across stroke</option>
+          <option value="center">Centre → edge</option>
+          <option value="bands">Bands</option>
+        </select></div>
+      <div class="row" data-show="style.grad=bands"><label>Band length</label><input type="range" min="10" max="800" step="1" data-bind="style.gradPeriod"><output></output></div>
+      <div class="row"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="style.opacity"><output></output></div>
+      <div class="row"><label>Pressure</label><input type="range" min="0" max="1" step="0.01" data-bind="style.pressure"><output></output></div>
+      <div class="row"><label>Taper in</label><input type="range" min="0" max="0.5" step="0.01" data-bind="style.taperStart"><output></output></div>
+      <div class="row"><label>Taper out</label><input type="range" min="0" max="0.5" step="0.01" data-bind="style.taperEnd"><output></output></div>
+      <div class="row" data-show="style.mode=flat|tube|ribbon|bevel|chrome|engrave"><label title="How a stroke's copies (and its self-crossings) stack where they overlap">Overlap</label>
+        <select data-bind="style.overlap">
+          <option value="later">Later part on top</option>
+          <option value="earlier">Earlier part on top</option>
+          <option value="weave">Weave (over / under)</option>
+          <option value="blend">Draw order</option>
+        </select></div>
+      <div class="row" data-show="style.overlap=weave&style.mode=flat|tube|ribbon|bevel|chrome|engrave"><label>Flip weave</label><input type="checkbox" data-bind="style.weaveFlip"></div>
+      <p class="hint" id="weaveInfo" hidden></p>
+      <div class="row"><label>Caps</label>
+        <select data-bind="style.cap"><option value="round">Round</option><option value="butt">Butt</option></select></div>
+      <div class="row" data-show="style.mode=ribbon"><label>Twist</label><input type="range" min="0" max="4" step="0.01" data-bind="style.twist"><output></output></div>
+      <div class="row" data-show="style.mode=engrave"><label>Lines</label><input type="range" min="2" max="30" step="1" data-bind="style.lines"><output></output></div>
+      <div class="row" data-show="style.mode=bevel"><label>Bevel</label><input type="range" min="0.05" max="1" step="0.01" data-bind="style.bevel"><output></output></div>
+      <div class="row" data-show="style.mode=glow|neon"><label>Glow</label><input type="range" min="0.1" max="3" step="0.05" data-bind="style.glow"><output></output></div>
+    </details>
+
+    <details open>
+      <summary>Fill <span class="hint">(closed splines)</span></summary>
+      <div class="row"><label>Fill</label>
+        <select data-bind="fill.mode">
+          <option value="none">None</option>
+          <optgroup label="Colour"><option value="flat">Flat</option><option value="linear">Linear gradient</option><option value="radial">Radial gradient</option><option value="dome">Dome (lit)</option></optgroup>
+          <optgroup label="Texture"><option value="noise">Noise</option><option value="hatch">Hatch</option><option value="cross">Cross-hatch</option><option value="dots">Dots</option><option value="cells">Cells</option><option value="marble">Marble</option></optgroup>
+        </select></div>
+      <div class="row" data-show="fill.mode=flat|linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Colour A</label><input type="color" data-bind="fill.colA"></div>
+      <div class="row" data-show="fill.mode=linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Colour B</label><input type="color" data-bind="fill.colB"></div>
+      <div class="row" data-show="fill.mode=linear|noise|hatch|cross|dots|cells|marble"><label>Angle</label><input type="range" min="0" max="360" step="1" data-bind="fill.angle"><output></output></div>
+      <div class="row" data-show="fill.mode=noise|hatch|cross|dots|cells|marble"><label>Scale</label><input type="range" min="2" max="400" step="0.5" data-bind="fill.scale"><output></output></div>
+      <div class="row" data-show="fill.mode=noise|hatch|cross|dots|cells|marble"><label title="Line weight, dot size, contrast or turbulence">Weight</label><input type="range" min="0" max="1" step="0.01" data-bind="fill.thick"><output></output></div>
+      <div class="row" data-show="fill.mode=flat|linear|radial|noise|hatch|cross|dots|cells|marble"><label>Lit (dome)</label><input type="checkbox" data-bind="fill.lit"></div>
+      <div class="row" data-show="fill.mode=flat|linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="fill.opacity"><output></output></div>
+    </details>
+
+    <details open>
+      <summary>Light</summary>
+      <div class="row"><label>Azimuth</label><input type="range" min="0" max="360" step="1" data-bind="light.az"><output></output></div>
+      <div class="row"><label>Elevation</label><input type="range" min="5" max="90" step="1" data-bind="light.el"><output></output></div>
+      <div class="row"><label>Ambient</label><input type="range" min="0" max="1" step="0.01" data-bind="light.ambient"><output></output></div>
+      <div class="row"><label>Specular</label><input type="range" min="0" max="2" step="0.01" data-bind="light.spec"><output></output></div>
+      <div class="row"><label>Shininess</label><input type="range" min="2" max="128" step="1" data-bind="light.shine"><output></output></div>
+      <div class="row"><label title="Each symmetric copy carries its own (mirrored/rotated) light">Follow symmetry</label><input type="checkbox" data-bind="light.follow"></div>
+    </details>
+
+    <details open>
+      <summary>Document</summary>
+      <div class="row"><label>Background</label><input type="color" data-bind="doc.bg"></div>
+      <div class="row"><label>Artboard</label>
+        <select id="docSize">
+          <option value="2048x2048">2048 × 2048</option>
+          <option value="1024x1024">1024 × 1024</option>
+          <option value="3000x3000">3000 × 3000</option>
+          <option value="1920x1080">1920 × 1080</option>
+          <option value="1080x1920">1080 × 1920</option>
+          <option value="2480x3508">A4 portrait @300</option>
+        </select></div>
+    </details>
+
+    <details open id="selSection">
+      <summary>Selection</summary>
+      <div class="btns">
+        <button data-act="group" title="Share one symmetry / recursion / warp across the selection (Ctrl+G)">Group</button>
+        <button data-act="ungroup" title="Ctrl+Shift+G">Ungroup</button>
+        <button data-act="join" title="Merge selected open strokes end-to-end into one continuous stroke (Ctrl+J)">Join</button>
+        <button data-act="dup" title="Ctrl+D">Duplicate</button>
+        <button data-act="raise" title="PageUp">Raise</button>
+        <button data-act="lower" title="PageDown">Lower</button>
+        <button data-act="resetWidths" title="Set every control point's width back to 1">Reset widths</button>
+        <button data-act="del" class="danger" title="Delete">Delete</button>
+      </div>
+      <div class="row"><label>Move to layer</label><select id="moveLayer"></select></div>
+      <p class="hint" id="selInfo"></p>
+    </details>
+  </aside>
+</main>
+
+<div id="modal" hidden>
+  <div class="card">
+    <h3 id="modalTitle"></h3>
+    <div id="modalBody"></div>
+    <div class="btns" id="modalBtns"></div>
+  </div>
+</div>
+
+<footer id="status">
+  <span id="hint"></span>
+  <span class="spacer"></span>
+  <span id="stats"></span>
+  <span id="zoom"></span>
+  <span class="credit">Created with help from Claude AI</span>
+</footer>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>
