@@ -4,7 +4,7 @@ import {
   STROKE_MODES, ADDITIVE_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
 } from './shaders.js';
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
-import { allTransformsCached, mobApply, mobScaleAt, isAffine } from './symmetry.js';
+import { allTransformsCached, mobApply, mobScaleAt, isAffine, setCopyLimit } from './symmetry.js';
 import { warpActive, warpIndex } from './warp.js';
 import { solveWeave } from './weave.js';
 import { chainsCached } from './chains.js';
@@ -57,6 +57,7 @@ function program(gl, vs, fs) {
   const p = gl.createProgram();
   gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
   gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+  gl.bindAttribLocation(p, 0, 'a_pos');      // attribute 0 is always a real per-vertex array
   gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error('Program link failed: ' + gl.getProgramInfoLog(p));
   const uni = {}, att = {};
@@ -66,6 +67,11 @@ function program(gl, vs, fs) {
   for (let i = 0; i < na; i++) { const info = gl.getActiveAttrib(p, i); att[info.name] = gl.getAttribLocation(p, info.name); }
   return { p, uni, att };
 }
+
+// ?noinst in the page URL forces the per-copy fallback path (used by the tests)
+function o_noInstancing() { try { return /[?&]noinst\b/.test(location.search); } catch { return false; } }
+
+const INST_STRIDE = 9;   // a.re a.im b.re b.im | c.re c.im d.re d.im | conj
 
 export class Renderer {
   constructor(canvas) {
@@ -84,6 +90,12 @@ export class Renderer {
     const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
     this.maxDim = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE), vp[0], vp[1]);
     this.enabledAttribs = new Set();
+    this.divisors = new Map();
+    // one draw call per recursion level instead of one per copy; WebGL1 extension, near-universal
+    this.inst = o_noInstancing() ? null : gl.getExtension('ANGLE_instanced_arrays');
+    this.instBuf = gl.createBuffer();
+    this.instData = new Float32Array(9 * 1024);
+    setCopyLimit(this.inst ? 50000 : 4000);
     this.screenT = null;
     this.stats = { copiesDrawn: 0, copiesCulled: 0 };
   }
@@ -182,12 +194,21 @@ export class Renderer {
     }
   }
 
-  setAttribs(list) {
+  /** Enable exactly these attribute arrays; `instanced` ones advance per instance, the rest per vertex. */
+  setAttribs(list, instanced = []) {
     const gl = this.gl;
-    const want = new Set(list.filter((l) => l !== undefined && l >= 0));
+    const ok = (l) => l !== undefined && l >= 0;
+    const inst = new Set(instanced.filter(ok));
+    const want = new Set(list.filter(ok).concat([...inst]));
     for (const loc of this.enabledAttribs) if (!want.has(loc)) gl.disableVertexAttribArray(loc);
     for (const loc of want) if (!this.enabledAttribs.has(loc)) gl.enableVertexAttribArray(loc);
     this.enabledAttribs = want;
+    if (this.inst) {
+      for (const loc of want) {
+        const d = inst.has(loc) ? 1 : 0;
+        if ((this.divisors.get(loc) || 0) !== d) { this.inst.vertexAttribDivisorANGLE(loc, d); this.divisors.set(loc, d); }
+      }
+    }
   }
 
   lightVec(doc) {
@@ -302,12 +323,54 @@ export class Renderer {
     return T;
   }
 
-  /** Per-copy transform uniforms. */
-  setMob(P, mob) {
+  /** Upload the copies' Möbius coefficients (instanced path). */
+  uploadInstances(list) {
+    if (!this.inst) return;
+    const n = list.length * INST_STRIDE;
+    if (this.instData.length < n) this.instData = new Float32Array(Math.max(n, this.instData.length * 2));
+    const d = this.instData;
+    let o = 0;
+    for (const t of list) {
+      const m = t.mob;
+      d[o++] = m.a[0]; d[o++] = m.a[1]; d[o++] = m.b[0]; d[o++] = m.b[1];
+      d[o++] = m.c[0]; d[o++] = m.c[1]; d[o++] = m.d[0]; d[o++] = m.d[1];
+      d[o++] = m.conj ? 1 : 0;
+    }
     const gl = this.gl;
-    gl.uniform4f(P.uni.u_mA, mob.a[0], mob.a[1], mob.b[0], mob.b[1]);
-    gl.uniform4f(P.uni.u_mB, mob.c[0], mob.c[1], mob.d[0], mob.d[1]);
-    gl.uniform1f(P.uni.u_mConj, mob.conj ? 1 : 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, d.subarray(0, n), gl.DYNAMIC_DRAW);
+  }
+
+  /** Point the instance attributes at copy `first` of the uploaded list. */
+  pointInstances(P, first) {
+    const gl = this.gl, B = INST_STRIDE * 4, off = first * B;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
+    gl.vertexAttribPointer(P.att.i_mA, 4, gl.FLOAT, false, B, off);
+    gl.vertexAttribPointer(P.att.i_mB, 4, gl.FLOAT, false, B, off + 16);
+    gl.vertexAttribPointer(P.att.i_conj, 1, gl.FLOAT, false, B, off + 32);
+  }
+
+  /** Fallback path: one copy's coefficients as constant attribute values. */
+  constInstance(P, mob) {
+    const gl = this.gl;
+    gl.vertexAttrib4f(P.att.i_mA, mob.a[0], mob.a[1], mob.b[0], mob.b[1]);
+    gl.vertexAttrib4f(P.att.i_mB, mob.c[0], mob.c[1], mob.d[0], mob.d[1]);
+    gl.vertexAttrib1f(P.att.i_conj, mob.conj ? 1 : 0);
+  }
+
+  /**
+   * Draw `count` vertices from `first` for each copy in list[a..b), which all share one level.
+   * Instanced: one call (instance buffer already uploaded for `list`). Fallback: one call per copy.
+   */
+  drawRange(P, list, a, b, first, count) {
+    if (b <= a) return;
+    const gl = this.gl;
+    if (this.inst) {
+      this.pointInstances(P, a);
+      this.inst.drawArraysInstancedANGLE(gl.TRIANGLES, first, count, b - a);
+    } else {
+      for (let i = a; i < b; i++) { this.constInstance(P, list[i].mob); gl.drawArrays(gl.TRIANGLES, first, count); }
+    }
   }
 
   setWarp(P, s) {
@@ -336,7 +399,8 @@ export class Renderer {
           if (isAffine(t.mob) || rr < diag * 4) { this.stats.copiesCulled++; continue; }
         }
       }
-      out.push(t);
+      const c = mobApply(t.mob, b.x, b.y);
+      out.push({ mob: t.mob, level: t.level, cx: c.x, cy: c.y, r: rr * (isAffine(t.mob) ? 1.02 : 1.35) * (warped ? 1.8 : 1) });
     }
     this.stats.copiesDrawn += out.length;
     return out;
@@ -359,15 +423,21 @@ export class Renderer {
     const warped = warpActive(s.warp);
 
     // ---- fill: stencil even-odd, AA fringe outside, cover inside ----
+    // Even-odd stencilling needs each copy on its own, so copies are drawn in batches whose image
+    // circles don't overlap: one instanced call per batch and pass, still one copy's parity per pixel.
     const f = s.fill;
     if (m.fill && f && f.mode !== 'none' && f.opacity > 0) {
       const P = this.progFill;
       const fm = m.fill;
       const looks = levelLooks(f.colA, f.colB, f.opacity, rec, levels);
+      const { order, batches } = this.fillBatches(xs, looks);
       gl.useProgram(P.p);
+      this.uploadInstances(order);
       gl.bindBuffer(gl.ARRAY_BUFFER, m.fillVbo);
       const B = FILL_STRIDE * 4;
-      this.setAttribs([P.att.a_pos, P.att.a_nrm, P.att.a_side]);
+      const instLocs = this.inst ? [P.att.i_mA, P.att.i_mB, P.att.i_conj] : [];
+      this.setAttribs([P.att.a_pos, P.att.a_nrm, P.att.a_side], instLocs);
+      gl.bindBuffer(gl.ARRAY_BUFFER, m.fillVbo);
       gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, B, 0);
       gl.vertexAttribPointer(P.att.a_nrm, 2, gl.FLOAT, false, B, 8);
       gl.vertexAttribPointer(P.att.a_side, 1, gl.FLOAT, false, B, 16);
@@ -390,33 +460,27 @@ export class Renderer {
       gl.enable(gl.STENCIL_TEST);
       gl.stencilMask(0xff);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-      let curL = -1;
-      for (const t of xs) {
-        const lk = looks[t.level] || looks[0];
-        if (lk.o <= 0.002) continue;
-        if (t.level !== curL) {
-          curL = t.level;
-          gl.uniform3f(P.uni.u_colA, lk.a[0], lk.a[1], lk.a[2]);
-          gl.uniform3f(P.uni.u_colB, lk.b[0], lk.b[1], lk.b[2]);
-          gl.uniform1f(P.uni.u_opacity, lk.o);
-        }
-        this.setMob(P, t.mob);
-        const bent = warped || !isAffine(t.mob);
+      for (const bt of batches) {
+        const lk = looks[bt.level] || looks[0];
+        gl.uniform3f(P.uni.u_colA, lk.a[0], lk.a[1], lk.a[2]);
+        gl.uniform3f(P.uni.u_colB, lk.b[0], lk.b[1], lk.b[2]);
+        gl.uniform1f(P.uni.u_opacity, lk.o);
+        const bent = warped || bt.bent;
         gl.colorMask(false, false, false, false);
         gl.stencilFunc(gl.ALWAYS, 0, 0xff);
         gl.stencilOp(gl.KEEP, gl.KEEP, gl.INVERT);
         gl.uniform1f(P.uni.u_fringe, 0);
-        gl.drawArrays(gl.TRIANGLES, 0, fm.fanCount);
+        this.drawRange(P, order, bt.a, bt.b, 0, fm.fanCount);
         gl.colorMask(true, true, true, true);
         gl.stencilFunc(gl.EQUAL, 0, 0xff);
         gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
         gl.uniform1f(P.uni.u_fringe, 1);
-        gl.drawArrays(gl.TRIANGLES, fm.fringeFirst, fm.fringeCount);
+        this.drawRange(P, order, bt.a, bt.b, fm.fringeFirst, fm.fringeCount);
         gl.stencilFunc(gl.NOTEQUAL, 0, 0xff);
         gl.stencilOp(gl.ZERO, gl.ZERO, gl.ZERO);
         gl.uniform1f(P.uni.u_fringe, 0);
-        if (bent) gl.drawArrays(gl.TRIANGLES, fm.gridFirst, fm.gridCount);
-        else gl.drawArrays(gl.TRIANGLES, fm.quadFirst, fm.quadCount);
+        if (bent) this.drawRange(P, order, bt.a, bt.b, fm.gridFirst, fm.gridCount);
+        else this.drawRange(P, order, bt.a, bt.b, fm.quadFirst, fm.quadCount);
       }
       gl.disable(gl.STENCIL_TEST);
     }
@@ -432,9 +496,11 @@ export class Renderer {
     const weaving = ordered && st.overlap === 'weave';
     if (weaving) this.weave(s, m, xsAll);
 
-    gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
+    this.uploadInstances(xs);
     const A = P.att, B = STROKE_STRIDE * 4;
-    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along].concat(weaving ? [A.a_weave] : []));
+    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along].concat(weaving ? [A.a_weave] : []),
+      this.inst ? [A.i_mA, A.i_mB, A.i_conj] : []);
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
     gl.vertexAttribPointer(A.a_pos, 2, gl.FLOAT, false, B, 0);
     gl.vertexAttribPointer(A.a_ext, 2, gl.FLOAT, false, B, 8);
     gl.vertexAttribPointer(A.a_vc, 2, gl.FLOAT, false, B, 16);
@@ -488,22 +554,25 @@ export class Renderer {
       const zc = layering === 'above' ? 0.999 - slice * (L + 0.5) : -0.999 + slice * (L + 0.5);
       return [zc, slice * 0.45 * sign];
     };
+    // runs of copies sharing a recursion level → one (instanced) call each
+    const runs = [];
+    for (let i = 0; i < xs.length;) {
+      let j = i + 1;
+      while (j < xs.length && xs[j].level === xs[i].level) j++;
+      runs.push([i, j, xs[i].level]);
+      i = j;
+    }
     const drawCopies = () => {
-      let curL = -1;
-      for (const t of xs) {
-        const lk = looks[t.level] || looks[0];
+      for (const [a, b, L] of runs) {
+        const lk = looks[L] || looks[0];
         if (lk.o <= 0.002) continue;
-        if (t.level !== curL) {
-          curL = t.level;
-          const z = zFor(t.level);
-          gl.uniform1f(P.uni.u_zOff, z[0]);
-          gl.uniform1f(P.uni.u_zScale, z[1]);
-          gl.uniform3f(P.uni.u_colA, lk.a[0], lk.a[1], lk.a[2]);
-          gl.uniform3f(P.uni.u_colB, lk.b[0], lk.b[1], lk.b[2]);
-          gl.uniform1f(P.uni.u_opacity, lk.o);
-        }
-        this.setMob(P, t.mob);
-        gl.drawArrays(gl.TRIANGLES, 0, m.count);
+        const z = zFor(L);
+        gl.uniform1f(P.uni.u_zOff, z[0]);
+        gl.uniform1f(P.uni.u_zScale, z[1]);
+        gl.uniform3f(P.uni.u_colA, lk.a[0], lk.a[1], lk.a[2]);
+        gl.uniform3f(P.uni.u_colB, lk.b[0], lk.b[1], lk.b[2]);
+        gl.uniform1f(P.uni.u_opacity, lk.o);
+        this.drawRange(P, xs, a, b, 0, m.count);
       }
     };
 
@@ -530,6 +599,61 @@ export class Renderer {
       gl.disable(gl.DEPTH_TEST);
     }
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /**
+   * Order copies into fill batches: each batch shares a level and its copies' image circles are
+   * pairwise disjoint, so per-copy even-odd stencilling survives a single instanced draw.
+   */
+  fillBatches(list, looks) {
+    const order = [], batches = [];
+    if (!this.inst) {
+      list.forEach((t, i) => { if ((looks[t.level] || looks[0]).o > 0.002) { order.push(t); batches.push({ a: order.length - 1, b: order.length, level: t.level, bent: !isAffine(t.mob) }); } });
+      return { order, batches };
+    }
+    for (let i = 0; i < list.length;) {
+      let j = i + 1;
+      while (j < list.length && list[j].level === list[i].level) j++;
+      const L = list[i].level;
+      if ((looks[L] || looks[0]).o > 0.002) {
+        const run = list.slice(i, j);
+        const rs = run.map((t) => t.r).sort((p, q) => p - q);
+        const cell = Math.max(1e-3, rs[rs.length >> 1] * 2);
+        const groups = [];                       // {items, grid}
+        for (const t of run) {
+          const x0 = Math.floor((t.cx - t.r) / cell), x1 = Math.floor((t.cx + t.r) / cell);
+          const y0 = Math.floor((t.cy - t.r) / cell), y1 = Math.floor((t.cy + t.r) / cell);
+          const big = (x1 - x0 + 1) * (y1 - y0 + 1) > 64;
+          let home = null;
+          for (let g = 0; g < groups.length && g < 24 && !home; g++) {
+            const G = groups[g];
+            let clash = false;
+            if (big) clash = G.items.some((u) => Math.hypot(u.cx - t.cx, u.cy - t.cy) < u.r + t.r);
+            else {
+              for (let y = y0; y <= y1 && !clash; y++) for (let x = x0; x <= x1 && !clash; x++) {
+                const l = G.grid.get(x + ',' + y);
+                if (l) for (const u of l) if (Math.hypot(u.cx - t.cx, u.cy - t.cy) < u.r + t.r) { clash = true; break; }
+              }
+              if (!clash) for (const u of G.bigs) if (Math.hypot(u.cx - t.cx, u.cy - t.cy) < u.r + t.r) { clash = true; break; }
+            }
+            if (!clash) home = G;
+          }
+          if (!home) { home = { items: [], grid: new Map(), bigs: [] }; groups.push(home); }
+          home.items.push(t);
+          if (big) home.bigs.push(t);
+          else for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            const k = x + ',' + y; let l = home.grid.get(k); if (!l) home.grid.set(k, l = []); l.push(t);
+          }
+        }
+        for (const G of groups) {
+          const a = order.length;
+          for (const t of G.items) order.push(t);
+          batches.push({ a, b: order.length, level: L, bent: G.items.some((t) => !isAffine(t.mob)) });
+        }
+      }
+      i = j;
+    }
+    return { order, batches };
   }
 
   // ---- export -----------------------------------------------------------

@@ -22,21 +22,21 @@ export const BLEND_MODES = { normal: 0, multiply: 1, screen: 2, overlay: 3, dark
 
 // Shared vertex-side mapping: world = warp(möbius(local)); J = Jwarp · Jmöbius
 const MAP = `
-uniform vec4 u_mA;          // a.re a.im b.re b.im
-uniform vec4 u_mB;          // c.re c.im d.re d.im
-uniform float u_mConj;      // 1: map acts on conj(z)
+attribute vec4 i_mA;        // per copy (instanced): a.re a.im b.re b.im
+attribute vec4 i_mB;        // per copy: c.re c.im d.re d.im
+attribute float i_conj;     // per copy: 1 = map acts on conj(z)
 uniform mat3 u_view;
 uniform float u_pxWorld;    // world units per device pixel
 vec2 cmul(vec2 p, vec2 q) { return vec2(p.x * q.x - p.y * q.y, p.x * q.y + p.y * q.x); }
 vec2 cdiv(vec2 p, vec2 q) { float d = max(dot(q, q), 1e-30); return vec2(p.x * q.x + p.y * q.y, p.y * q.x - p.x * q.y) / d; }
-vec2 mobW(vec2 p) { return u_mConj > 0.5 ? vec2(p.x, -p.y) : p; }
-vec2 mobP(vec2 p) { vec2 w = mobW(p); return cdiv(cmul(u_mA.xy, w) + u_mA.zw, cmul(u_mB.xy, w) + u_mB.zw); }
+vec2 mobW(vec2 p) { return i_conj > 0.5 ? vec2(p.x, -p.y) : p; }
+vec2 mobP(vec2 p) { vec2 w = mobW(p); return cdiv(cmul(i_mA.xy, w) + i_mA.zw, cmul(i_mB.xy, w) + i_mB.zw); }
 mat2 mobJ(vec2 p) {
   vec2 w = mobW(p);
-  vec2 den = cmul(u_mB.xy, w) + u_mB.zw;
-  vec2 det = cmul(u_mA.xy, u_mB.zw) - cmul(u_mA.zw, u_mB.xy);
+  vec2 den = cmul(i_mB.xy, w) + i_mB.zw;
+  vec2 det = cmul(i_mA.xy, i_mB.zw) - cmul(i_mA.zw, i_mB.xy);
   vec2 k = cdiv(det, cmul(den, den));
-  return u_mConj > 0.5 ? mat2(k.x, k.y, k.y, -k.x) : mat2(k.x, k.y, -k.y, k.x);
+  return i_conj > 0.5 ? mat2(k.x, k.y, k.y, -k.x) : mat2(k.x, k.y, -k.y, k.x);
 }
 ` + warpGLSL;
 

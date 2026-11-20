@@ -46,6 +46,8 @@ The vertex shader evaluates the map for each vertex, then applies the optional w
 
 Copies smaller than about a pixel, or far off the artboard, are culled before drawing.
 
+**Instancing.** With `ANGLE_instanced_arrays` (a WebGL1 extension available almost everywhere), each copy's Möbius coefficients are per-instance attributes, and a stroke draws in one call per recursion level and pass. Fills need even-odd stencilling for each copy on its own, so their copies are grouped into batches whose image circles don't overlap, with one instanced call per batch and pass. Without the extension (or with `?noinst` in the URL) it falls back to one call per copy. Both paths render pixel-identical output.
+
 ## Symmetry (per stroke)
 
 | Mode | |
@@ -59,7 +61,12 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 
 - **Nest**: Mᴸ ∘ G, so the whole figure repeats inside itself.
 - **Branch**: each child is (g·M)ᴸ ∘ G, so every copy spawns a smaller figure. This works on top of any mode, hyperbolic and inversion included.
-- **Per-level controls**: fade, hue shift, and layering (interleaved, children on top, or children beneath). The total is capped at 4000 copies per stroke.
+- **Per-level controls**: fade, hue shift, and layering (interleaved, children on top, or children beneath).
+- **Wallpaper, hyperbolic and inversion** build the recursive motif first, then let the group place it. That way every tile carries the recursion:
+  - nest: g ∘ Mᴸ
+  - branch: g ∘ (M ∘ k)ᴸ, where k ranges over the symmetries fixing the centre. For p6m that's the 12 operations at the lattice origin; for {p,q}, the 2p rotations and reflections about the disk centre.
+  - For the finite point groups this is the same as before.
+- **Copy limit**: 50,000 copies per stroke, or 4,000 without instancing. When a level would exceed it, the panel shows how many copies that level needs and what to change.
 
 ## Warp (per stroke, applied to every copy)
 
@@ -146,6 +153,11 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.4.0**:
+  - Recursion now works with wallpaper, hyperbolic and inversion symmetry: it builds the motif first, so every tile gets the nested or branching motif. Before, branch silently did nothing and nest shrank the whole tiling.
+  - Instanced rendering raises the copy limit from 4,000 to 50,000.
+  - The panel explains exactly why a level is capped.
 
 - **2.3.1**: Closed strokes and rings of touching strokes no longer show a seam where they close. The along-gradient is mirrored, and bands and ribbon twist fit a whole number of repeats around the loop.
 

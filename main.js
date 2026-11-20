@@ -5,13 +5,13 @@ import {
   newDocument, makeStroke, touch, normaliseDoc, serialise, History,
   defaultStyle, defaultFill, defaultShape, defaultLayer, nextRev, newId, syncGroup,
 } from './engine/document.js';
-import { defaultSym, defaultRec, allTransformsCached, mobInverse, mobApply, mobScaleAt, hyperbolicValid } from './engine/symmetry.js';
+import { defaultSym, defaultRec, allTransformsCached, mobInverse, mobApply, mobScaleAt, hyperbolicValid, copyLimit } from './engine/symmetry.js';
 import { defaultWarp, warpActive, warpInverse, warpPoint, WARPS, WARP_LABELS } from './engine/warp.js';
 import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js';
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.3.1';
+export const VERSION = '2.4.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -315,7 +315,15 @@ function updateInfo() {
   const xs = allTransformsCached(sym, rec, doc.width, doc.height);
   const recEl = $('#recInfo');
   if (!rec || rec.mode === 'off') recEl.textContent = '';
-  else recEl.textContent = `${xs.length} copies per stroke across ${xs.levels + 1} levels` + (xs.capped ? ` — capped at ${xs.length}; deeper levels dropped.` : '.');
+  else {
+    recEl.textContent = `${xs.length.toLocaleString()} copies per stroke across ${xs.levels + 1} level${xs.levels ? 's' : ''}.`;
+    if (xs.capped) {
+      const tip = sym.mode === 'wallpaper' ? 'larger cells, a smaller group or less depth'
+        : sym.mode === 'hyperbolic' ? 'a lower tiling depth or less recursion depth' : 'less depth';
+      recEl.textContent += ` Level ${xs.levels + 1} would need ${xs.needed.toLocaleString()} copies (limit ${copyLimit().toLocaleString()}) — try ${tip}.`;
+    }
+  }
+  recEl.classList.toggle('warn', !!(rec && rec.mode !== 'off' && xs.capped));
   let t = `${xs.length} cop${xs.length === 1 ? 'y' : 'ies'} per stroke`;
   if (sym.mode === 'hyperbolic') {
     const p = Math.round(sym.hp), q = Math.round(sym.hq);
@@ -921,6 +929,10 @@ function onPointerMove(e) {
   const tool = effectiveTool();
   if (tool === 'edit') {
     const h = handleAt(sx, sy);
+    // hover hit-testing walks every copy: throttle it (big wallpaper / hyperbolic sets run to 50k copies)
+    const now = performance.now();
+    if (h < 0 && now - (onPointerMove.lastHit || 0) < 40) { dirty = true; return; }
+    onPointerMove.lastHit = now;
     const hv = h >= 0 ? primary : (hitTest(w.x, w.y) || {}).stroke || null;
     if (h !== handleHot || hv !== hover) { handleHot = h; hover = hv; updateCursorClass(); }
   } else if (tool === 'width') {

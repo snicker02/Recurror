@@ -95,7 +95,11 @@ const about = (cx, cy, m) => mul(translate(cx, cy), mul(m, translate(-cx, -cy)))
 // defaults
 // ---------------------------------------------------------------------------
 export const SYM_MODES = ['none', 'mirror', 'rotate', 'kaleido', 'spiral', 'wallpaper', 'hyperbolic', 'inversion'];
-export const MAX_TOTAL = 4000;
+export const MAX_TOTAL = 4000;          // cap for a base group (lattice cells, hyperbolic tiles, inversion words)
+let COPY_LIMIT = MAX_TOTAL;             // cap for group × recursion (raised when the renderer can instance)
+export function setCopyLimit(n) { COPY_LIMIT = Math.max(MAX_TOTAL, n | 0); allCache.clear(); }
+export function copyLimit() { return COPY_LIMIT; }
+const POINT_MODES = new Set(['none', 'mirror', 'rotate', 'kaleido', 'spiral']);
 
 export function defaultSym(w = 2048, h = 2048) {
   return {
@@ -411,36 +415,65 @@ export function recMap(sym, rec) {
   return mobFromAffine(mul(translate(cx + ox, cy + oy), mul(mul(rotate(tw), scale(k)), translate(-cx, -cy))));
 }
 
+/** Group elements that fix the point (x, y) — the local symmetry the recursion branches with. */
+function stabiliser(base, x, y) {
+  const tol = 1e-6 * Math.max(1, Math.abs(x), Math.abs(y));
+  const K = base.filter((e) => { const p = mobApply(e.mob, x, y); return Math.abs(p.x - x) <= tol && Math.abs(p.y - y) <= tol; }).map((e) => e.mob);
+  return K.length ? K : [MOB_IDENT];
+}
+
 /**
  * Base group combined with recursion; entries ascend by level, entry 0 = identity.
  * Array carries .levels and .capped.
+ *
+ * Point groups (none / mirror / rotational / kaleidoscope / spiral) — finite, centred:
+ *   nest   level L = Mᴸ ∘ g                 branch  level L = (g·M)ᴸ ∘ g
+ * Infinite / large groups (wallpaper, hyperbolic, inversion) — recursion builds the motif first,
+ * then the group places it, so every tile gets the recursive motif:
+ *   nest   level L = g ∘ Mᴸ                 branch  level L = g ∘ (M ∘ k)ᴸ,  k ∈ K = stabiliser of the centre
+ * (For a finite group about its centre K = G and the branch formula reduces to the point-group one.)
  */
 export function allTransforms(sym, rec, w, h) {
+  const limit = COPY_LIMIT;
   const base = symTransforms(sym, w, h);
   const out = base.slice();
   out.levels = 0; out.capped = false;
   if (!rec || rec.mode === 'off' || !(rec.depth >= 1)) return out;
   const depth = Math.max(1, Math.min(8, Math.round(rec.depth)));
   const M = recMap(sym, rec);
-  if (rec.mode === 'nest') {
-    let ML = MOB_IDENT;
-    for (let L = 1; L <= depth; L++) {
-      if (out.length + base.length > MAX_TOTAL) { out.capped = true; break; }
-      ML = mobCompose(M, ML);
-      for (const b of base) out.push(entry(mobCompose(ML, b.mob), L));
-      out.levels = L;
+  if (POINT_MODES.has(sym.mode)) {
+    if (rec.mode === 'nest') {
+      let ML = MOB_IDENT;
+      for (let L = 1; L <= depth; L++) {
+        if (out.length + base.length > limit) { out.capped = true; out.needed = out.length + base.length; break; }
+        ML = mobCompose(M, ML);
+        for (const b of base) out.push(entry(mobCompose(ML, b.mob), L));
+        out.levels = L;
+      }
+    } else {
+      const kids = base.map((b) => mobCompose(b.mob, M));
+      let prev = base;
+      for (let L = 1; L <= depth; L++) {
+        if (out.length + prev.length * kids.length > limit) { out.capped = true; out.needed = out.length + prev.length * kids.length; break; }
+        const next = [];
+        for (const k of kids) for (const e of prev) next.push(entry(mobCompose(k, e.mob), L));
+        for (const e of next) out.push(e);
+        prev = next;
+        out.levels = L;
+      }
     }
-  } else {
-    const kids = base.map((b) => mobCompose(b.mob, M));
-    let prev = base;
-    for (let L = 1; L <= depth; L++) {
-      if (out.length + prev.length * kids.length > MAX_TOTAL) { out.capped = true; break; }
-      const next = [];
-      for (const k of kids) for (const e of prev) next.push(entry(mobCompose(k, e.mob), L));
-      for (const e of next) out.push(e);
-      prev = next;
-      out.levels = L;
-    }
+    return out;
+  }
+  // motif-first: R_L is the level-L recursion of the motif; the group places every element of it
+  const K = rec.mode === 'branch' ? stabiliser(base, +sym.cx, +sym.cy) : [MOB_IDENT];
+  let R = [MOB_IDENT];
+  for (let L = 1; L <= depth; L++) {
+    const next = [];
+    for (const r of R) for (const k of K) next.push(mobCompose(r, mobCompose(M, k)));
+    if (out.length + base.length * next.length > limit) { out.capped = true; out.needed = out.length + base.length * next.length; break; }
+    for (const g of base) for (const r of next) out.push(entry(mobCompose(g.mob, r), L));
+    R = next;
+    out.levels = L;
   }
   return out;
 }
@@ -474,7 +507,7 @@ export function recKey(rec) {
 
 const allCache = new Map();
 export function allTransformsCached(sym, rec, w, h) {
-  const k = symKey(sym, w, h) + '#' + recKey(rec) + '#' + (rec && rec.mode !== 'off' ? sym.cx + ',' + sym.cy : '');
+  const k = symKey(sym, w, h) + '#' + recKey(rec) + '#' + (rec && rec.mode !== 'off' ? sym.cx + ',' + sym.cy : '') + '#' + COPY_LIMIT;
   let v = allCache.get(k);
   if (!v) {
     v = allTransforms(sym, rec, w, h);
