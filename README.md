@@ -154,6 +154,12 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.5.0**: Mobile pass.
+  - Phones: the top bar is one scrollable row instead of three wrapped rows, so the canvas gets more of the screen. In landscape the bars are slimmer and the panel is narrower.
+  - Double-tap now finishes pen strokes and inserts points on touch screens, where browsers don't send double-clicks.
+  - Bigger touch targets for buttons, checkboxes and sliders, and touch-specific hints in the status bar.
+  - Fixed the layout running off the right edge when the top bar was wider than the screen.
+
 - **2.4.0**:
   - Recursion now works with wallpaper, hyperbolic and inversion symmetry: it builds the motif first, so every tile gets the nested or branching motif. Before, branch silently did nothing and nest shrank the whole tiling.
   - Instanced rendering raises the copy limit from 4,000 to 50,000.
