@@ -1,4 +1,5 @@
 // Recurror — recursive mirror drawing with splines. App wiring, tools, UI.
+import { initPanelTabs } from './engine/tabs.js';
 import { Renderer } from './engine/renderer.js';
 import { drawOverlay, viewPoint } from './engine/overlay.js';
 import {
@@ -1411,6 +1412,7 @@ function boot() {
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', () => { spaceDown = false; updateCursorClass(); });
 
+  initPanelTabs($('#panel'));
   new ResizeObserver(() => resize()).observe(stage);
   resize();
   fitView();
