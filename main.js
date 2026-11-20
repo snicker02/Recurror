@@ -11,7 +11,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.4.0';
+export const VERSION = '2.5.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -59,6 +59,8 @@ let spaceDown = false;
 let dirty = true;
 const pointers = new Map();
 let pinch = null;
+// Touch double-tap (mobile browsers do not reliably fire dblclick when touch-action is none).
+let tapDown = null, lastTap = null, synthDblAt = -1e9;
 
 const TAP_SLOP = 4;          // px: a press that moves less than this…
 const TAP_MS = 400;          // …and lifts within this is a tap
@@ -75,6 +77,15 @@ const HINTS = {
   center: 'Centre: click or drag to place the symmetry centre (snaps to artboard landmarks when Snap is on)',
   pan: 'Pan: drag to move the view · wheel to zoom',
 };
+const TOUCH_HINTS = {
+  draw: 'Draw: drag to sketch · tap to place points, double-tap to finish · pinch to zoom',
+  pen: 'Pen: tap control points · double-tap to finish · tap the first point to close',
+  edit: 'Edit: tap to select · drag empty space to box-select · drag handles · double-tap a stroke to insert a point',
+  width: 'Width: drag outward from a control point to set its width',
+  center: 'Centre: tap or drag to place the symmetry centre',
+  pan: 'Pan: drag to move · pinch to zoom',
+};
+if (window.matchMedia && matchMedia('(pointer: coarse)').matches) Object.assign(HINTS, TOUCH_HINTS);
 
 const PRESETS = {
   'Gilded tube': { mode: 'tube', colA: '#f2c46d', colB: '#c2410c', grad: 'along', width: 18, opacity: 1 },
@@ -782,6 +793,7 @@ function onPointerDown(e) {
   ovCanvas.focus({ preventScroll: true });
   const { sx, sy } = screenPos(e);
   pointers.set(e.pointerId, { sx, sy, type: e.pointerType });
+  tapDown = (e.pointerType === 'touch' && pointers.size === 1) ? { sx, sy, t: performance.now() } : null;
 
   if (e.pointerType === 'touch' && pointers.size === 2) {
     if (drag && drag.kind === 'draw') preview = null;
@@ -959,7 +971,17 @@ function onPointerMove(e) {
 
 function onPointerUp(e) {
   pointers.delete(e.pointerId);
-  if (pinch) { if (pointers.size < 2) pinch = null; return; }
+  if (pinch) { if (pointers.size < 2) pinch = null; tapDown = null; return; }
+  if (e.type === 'pointerup' && e.pointerType === 'touch' && tapDown && pointers.size === 0) {
+    const { sx, sy } = screenPos(e), now = performance.now();
+    if (Math.hypot(sx - tapDown.sx, sy - tapDown.sy) < 10 && now - tapDown.t < 300) {
+      if (lastTap && now - lastTap.t < 350 && Math.hypot(sx - lastTap.sx, sy - lastTap.sy) < 30) {
+        lastTap = null;
+        queueMicrotask(() => { synthDblAt = performance.now(); onDblClick(e, true); });
+      } else lastTap = { sx, sy, t: now };
+    } else lastTap = null;
+  }
+  tapDown = null;
   if (!drag) return;
   switch (drag.kind) {
     case 'draw': {
@@ -997,7 +1019,8 @@ function onPointerUp(e) {
   dirty = true;
 }
 
-function onDblClick(e) {
+function onDblClick(e, synthetic = false) {
+  if (!synthetic && performance.now() - synthDblAt < 500) return; // already handled as a touch double-tap
   const { sx, sy } = screenPos(e);
   const tool = effectiveTool();
   if (tool === 'pen' || (tool === 'draw' && penPoints.length)) { if (penPoints.length) finishPen(false); return; }
