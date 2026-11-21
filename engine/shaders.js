@@ -11,7 +11,11 @@ precision mediump float;
 
 export const STROKE_MODES = {
   flat: 0, tube: 1, ribbon: 2, glow: 3, neon: 4, airbrush: 5, engrave: 6, bevel: 7, chrome: 8,
+  rope: 9, sketch: 10, drybrush: 11, watercolor: 12, outline: 13, stitch: 14,
 };
+/** Translucent wash modes: drawn without per-copy depth ordering (they are meant to layer). */
+export const SOFT_MODES = new Set([STROKE_MODES.airbrush, STROKE_MODES.watercolor]);
+export const DASH_MODES = { none: 0, dash: 1, dot: 2 };
 export const ADDITIVE_MODES = new Set([STROKE_MODES.glow, STROKE_MODES.neon]);
 export const GRAD_MODES = { none: 0, along: 1, across: 2, center: 3, bands: 4 };
 export const FILL_MODES = {
@@ -53,6 +57,8 @@ uniform float u_lightFollow;  // 1 = light lives in each copy's local frame
 uniform float u_zOff;         // depth slice centre (recursion layering)
 uniform float u_zScale;       // slice half-width; sign: + later part nearer, − earlier part nearer
 uniform float u_weaveOn;      // 1 = depth from the weave height profile
+attribute float i_idx;        // per copy: draw-order index in [0, 1)
+uniform float u_softZ;        // 1 = translucent wash: one depth per copy, so a copy paints each pixel once
 
 varying vec2 v_dc;
 varying float v_hw;
@@ -71,7 +77,7 @@ void main() {
   vec2 p = warpP(w0) + J * (a_ext * e);
   vec3 c = u_view * vec3(p, 1.0);
   float zv = u_weaveOn > 0.5 ? (-0.9 * a_weave + 0.05 * (1.0 - 2.0 * a_along.x)) : (1.0 - 2.0 * a_along.x);
-  gl_Position = vec4(c.xy, u_zOff + u_zScale * zv, 1.0);
+  gl_Position = vec4(c.xy, u_softZ > 0.5 ? 0.999 - 1.998 * i_idx : u_zOff + u_zScale * zv, 1.0);
   v_dc = a_vc * e;
   v_hw = a_hw;
   v_pad = pad;
@@ -102,6 +108,14 @@ uniform float u_pass;       // 0 = plain, 1 = fully covered pixels only, 2 = AA 
 uniform vec4 u_chain;       // (offset, own length, chain length, reversed) — touching strokes share one gradient
 uniform vec2 u_join;        // (start linked, end linked): linked caps shade as tube continuation
 uniform float u_loop;       // 1 = the line closes on itself: mirror the along-gradient so it has no seam
+uniform vec3 u_dash;        // (0 none | 1 dash | 2 dot, dash length, gap) — local units, loop-fitted
+uniform float u_strands;    // rope / sketch strand count
+uniform float u_rough;      // sketch wobble, dry-brush dryness, watercolour grain
+uniform float u_outline;    // outline rim thickness (fraction of the half width)
+uniform vec2 u_stitch;      // (spacing, slant)
+uniform float u_seed;       // per-stroke noise seed
+uniform float u_baseHw;     // nominal half width (local): noise scales don't explode where the stroke tapers
+uniform float u_softZ;      // 1 = translucent wash: interiors judged by geometric coverage
 
 varying vec2 v_dc;
 varying float v_hw;
@@ -115,6 +129,15 @@ vec3 shade(vec3 base, vec3 n) {
   vec3 r = reflect(-u_light, n);
   float sp = pow(max(r.z, 0.0), u_shine) * u_spec;
   return base * (u_ambient + (1.0 - u_ambient) * lam) + vec3(sp);
+}
+
+float hash1(float p) { p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+float hash2(vec2 p) { p = fract(p * vec2(0.1031, 0.1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
+float vnoise1(float x) { float i = floor(x), f = fract(x); return mix(hash1(i), hash1(i + 1.0), f * f * (3.0 - 2.0 * f)); }
+float vnoise2(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash2(i), hash2(i + vec2(1.0, 0.0)), u.x), mix(hash2(i + vec2(0.0, 1.0)), hash2(i + vec2(1.0, 1.0)), u.x), u.y);
 }
 
 // arc length along the whole chain of touching strokes
@@ -141,12 +164,34 @@ void main() {
   float linked = v_dc.y < 0.0 ? u_join.x : (v_dc.y > 0.0 ? u_join.y : 0.0);
   vec2 q = vec2(v_dc.x, v_dc.y * (1.0 - linked)) / hw;
   float rn = min(length(q), 1.0);
+  float sC = chainS();
+  // dash pattern (any mode): dashes cut coverage; dots turn the stroke into a row of spheres
+  float dashCov = 1.0;
+  if (u_dash.x > 0.5 && v_dc.y == 0.0) {
+    float P = max(u_dash.y + u_dash.z, 1e-3);
+    float ph = mod(sC, P);
+    if (u_dash.x < 1.5) {
+      dashCov = clamp(min(ph, u_dash.y - ph) / aa + 0.5, 0.0, 1.0);
+    } else {
+      vec2 dd = vec2(v_dc.x, ph - 0.5 * P);
+      r = length(dd);
+      edge = clamp((hw - r) / aa + 0.5, 0.0, 1.0);
+      // only whole dots: drop one that would be cut by an open end of the line
+      float sc = sC - ph + 0.5 * P;
+      if (u_loop < 0.5 && (sc - hw < 0.0 || sc + hw > u_chain.z)) edge = 0.0;
+      q = dd / hw;
+      rn = min(length(q), 1.0);
+    }
+  } else if (u_dash.x > 0.5) {
+    dashCov = u_dash.x < 1.5 ? 1.0 : 0.0;   // caps: dashes keep them, dots replace them
+  }
   vec3 base = mix(u_colA, u_colB, clamp(gradT(q, rn), 0.0, 1.0));
   vec2 lat = v_N * q.x + v_T * q.y;
   int mode = int(u_mode + 0.5);
 
   vec3 col = base;
   float a = edge;
+  float geo = edge;            // geometric coverage (wash modes keep alpha and shape apart)
 
   if (mode == 1) {
     vec3 n = normalize(vec3(lat, sqrt(max(0.0, 1.0 - rn * rn))));
@@ -194,10 +239,86 @@ void main() {
     col = mix(ground, col, smoothstep(-0.03, 0.03, h));
     vec3 rl = reflect(-u_light, n);
     col += vec3(pow(max(rl.z, 0.0), u_shine) * u_spec);
+  } else if (mode == 9) {
+    // rope: N lit strands twisting round the centreline; the front-most strand wins each pixel
+    float n = clamp(u_strands, 2.0, 8.0);
+    float rs = min(0.62, 1.25 / n + 0.12);
+    float R = 1.0 - rs;
+    float phi = sC * max(u_twist, 0.05) * 6.2831853 / 100.0;
+    float best = -2.0, t = 0.0, cov = 0.0, kk = 0.0;
+    for (int k = 0; k < 8; k++) {
+      if (float(k) >= n) break;
+      float ang = phi + 6.2831853 * float(k) / n;
+      float c = R * sin(ang), z = cos(ang);
+      float dpx = (rs - abs(q.x - c)) * hw / aa;       // pixels inside this strand
+      if (dpx > -0.5 && z > best) { best = z; t = (q.x - c) / rs; cov = clamp(dpx + 0.5, 0.0, 1.0); kk = float(k); }
+    }
+    t = clamp(t, -1.0, 1.0);
+    vec3 nn = normalize(vec3(v_N * t * 0.9 + v_T * 0.35 * t * sign(sin(phi)), sqrt(max(0.0, 1.0 - t * t))));
+    vec3 sc = u_grad < 0.5 ? mix(base, u_colB, mod(kk, 2.0) * 0.55) : base;
+    col = shade(sc, nn) * (0.78 + 0.22 * (best * 0.5 + 0.5));
+    a = cov * (v_dc.y == 0.0 || linked > 0.5 ? 1.0 : edge);
+  } else if (mode == 10) {
+    // pencil sketch: N thin wobbly lines across the width, occasionally broken
+    float n = clamp(u_strands, 1.0, 8.0);
+    float lw = max(0.55 * aa, 0.28 * hw / n);
+    float cov = 0.0;
+    for (int k = 0; k < 8; k++) {
+      if (float(k) >= n) break;
+      float fk = float(k);
+      float off = (n > 1.0 ? ((fk + 0.5) / n * 2.0 - 1.0) * 0.78 : 0.0);
+      off += u_rough * 0.35 * (vnoise1(sC / (u_baseHw * 3.0) + fk * 7.13 + u_seed) * 2.0 - 1.0);
+      float d = abs(v_dc.x - off * hw);
+      float line = clamp((lw - d) / aa + 0.5, 0.0, 1.0);
+      line *= smoothstep(0.12, 0.3, vnoise1(sC / (u_baseHw * 9.0) + fk * 3.7 + u_seed * 1.3) + 0.35 * (1.0 - u_rough));
+      cov = max(cov, line);
+    }
+    col = base * (0.9 + 0.1 * vnoise1(sC * 0.7 + u_seed));
+    a = cov * (v_dc.y == 0.0 || linked > 0.5 ? 1.0 : 0.0);
+  } else if (mode == 11) {
+    // dry brush: bristle streaks parallel to the stroke, thinning out as the paint runs dry
+    float streak = vnoise2(vec2(q.x * 9.0 + u_seed, sC / (u_baseHw * 5.0))) * 0.65 + vnoise2(vec2(q.x * 23.0 - u_seed, sC / (u_baseHw * 2.0))) * 0.35;
+    float dry = u_rough * (0.25 + 0.75 * clamp(sC / max(u_chain.z, 1e-3), 0.0, 1.0));
+    float thr = 0.12 + 0.7 * dry;
+    float ragged = 1.0 - smoothstep(0.75, 1.0, rn + 0.18 * (vnoise2(vec2(sC / u_baseHw * 0.8, u_seed)) - 0.5) * u_rough);
+    a = smoothstep(thr - 0.06, thr + 0.06, streak) * ragged * edge;
+    col = base * (0.82 + 0.3 * streak);
+  } else if (mode == 12) {
+    // watercolour: translucent wash, darker pooled rim, paper grain, ragged edge
+    float rag = 1.0 - 0.14 * u_rough * vnoise1(sC / (u_baseHw * 1.5) + u_seed);
+    float re = rn / rag;
+    float wet = clamp((hw * rag - r) / aa + 0.5, 0.0, 1.0);
+    float rim = smoothstep(0.55, 0.98, re);
+    float grain = vnoise2(gl_FragCoord.xy * 0.35 + u_seed) - 0.5;
+    col = base * (1.0 - 0.38 * rim) * (1.0 + 0.2 * grain * u_rough);
+    a = (0.42 + 0.38 * rim + 0.22 * grain * u_rough) * wet;
+    geo = wet;
+  } else if (mode == 13) {
+    // outline: hollow stroke, the rim shaded as a small tube
+    float th = clamp(u_outline, 0.05, 0.95);
+    float inner = hw * (1.0 - th);
+    a = edge * clamp((r - inner) / aa + 0.5, 0.0, 1.0);
+    if (linked > 0.5) a = edge * clamp((abs(v_dc.x) - inner) / aa + 0.5, 0.0, 1.0);
+    float rr = linked > 0.5 ? abs(v_dc.x) : r;
+    float t = clamp((rr - (hw - th * hw * 0.5)) / (th * hw * 0.5), -1.0, 1.0);
+    vec2 dir = rn > 1e-4 ? lat / rn : vec2(0.0);
+    vec3 nn = normalize(vec3(dir * t, sqrt(max(0.0, 1.0 - t * t))));
+    col = shade(base, nn);
+  } else if (mode == 14) {
+    // stitch: slanted marks across the stroke at a fixed spacing
+    float P = max(u_stitch.x, 1e-3);
+    float ph = mod(sC + q.x * hw * u_stitch.y, P);
+    float d = min(ph, P - ph);
+    float wdt = max(0.6 * aa, 0.18 * P);
+    a = clamp((wdt - d) / aa + 0.5, 0.0, 1.0) * clamp((hw * 0.92 - abs(v_dc.x)) / aa + 0.5, 0.0, 1.0) * (v_dc.y == 0.0 || linked > 0.5 ? 1.0 : 0.0);
+    vec3 nn = normalize(vec3(lat * 0.6, 1.0));
+    col = shade(base, nn);
   }
+  a *= dashCov;
+  geo *= dashCov;
 
   if (u_pass > 0.5) {
-    bool interior = a >= 0.999;
+    bool interior = (u_softZ > 0.5 ? geo : a) >= 0.999;
     if (u_pass < 1.5) { if (!interior) discard; }
     else if (interior) discard;
   }

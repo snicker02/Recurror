@@ -80,6 +80,26 @@ The warps are swirl, twirl, spherical, bubble, eyefish, sinusoidal, horseshoe, w
   - **Weave**: every crossing between the stroke and its copies is detected. A parity union-find makes each crossing one-over-one-under, then makes the over/under alternate along the strand wherever that doesn't contradict a crossing. The result is one height profile shared by all copies, and **Flip weave** inverts it.
 - **Draw order** keeps the old behaviour. Glow, neon and airbrush always blend.
 
+## Brushes
+
+**Shading** (how the strip is lit and coloured):
+- Flat, Tube, Ribbon, Glow, Neon, Airbrush, and the other existing modes.
+- **Rope**: 1–8 twisted strands (Strands), using the ribbon's Twist.
+- **Pencil sketch**: several jittery hatched passes (Strands, Roughness).
+- **Dry brush**: bristle streaks that break up with pressure and Roughness.
+- **Watercolour**: translucent wash with a darker pooled rim and paper grain. Each copy paints a pixel once (one depth per copy), so a stroke that crosses itself or folds at a tight bend doesn't build up darker patches, while copies still glaze over one another.
+- **Outline (hollow)**: just the rim, its thickness set by Rim.
+- **Stitch**: slanted thread stitches at a fixed spacing (Spacing, Slant).
+
+**Brush (shape, any shading)**:
+- **Nib ratio / Nib angle**: a flat calligraphy nib held at a fixed angle. The width follows ratio + (1 − ratio)·|sin(direction − nib)|, and the edges are swept along the nib, so stroke ends and turns get the slanted edge a real broad pen leaves.
+- **Width jitter / Jitter scale** and **Wobble / Wobble scale**: seeded, smooth noise on the width and on the centreline. It is the same in every copy and repeatable from the stroke's id. It's periodic around closed loops and fades out at blended ends, so joins stay exact.
+- **Pattern**: Solid, Dashed (Dash, Gap) or Dotted (Gap). On loops the period is fitted to a whole number of repeats; dotted lines only draw whole dots, and dots replace end caps.
+
+Inner sides of tight bends are clamped to the radius of curvature, so wide strokes no longer fold over themselves into dark fans.
+
+New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour, Pearls, Dotted line, Dashed line, Neon outline, Cross stitch.
+
 ## Fills
 
 Fills are drawn with even-odd stencilling.
@@ -153,6 +173,13 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.6.0**: More brushes.
+  - Six new shading modes: Rope, Pencil sketch, Dry brush, Watercolour, Outline (hollow) and Stitch.
+  - A Brush section that works with any shading: calligraphy nib, width jitter, centreline wobble, and dashed or dotted patterns.
+  - Eleven new presets.
+  - Wide strokes no longer fold into dark fans on tight bends; watercolour and airbrush no longer darken where a stroke overlaps itself.
+  - Old documents look exactly as before (all new settings default to off).
 
 - **2.5.0**: Mobile pass.
   - Phones: the top bar is one scrollable row instead of three wrapped rows, so the canvas gets more of the screen. In landscape the bars are slimmer and the panel is narrower.

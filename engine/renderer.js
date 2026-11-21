@@ -1,13 +1,14 @@
 // Recurror — WebGL1 renderer: layers → offscreen accumulation → screen / export.
 import {
   strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS,
-  STROKE_MODES, ADDITIVE_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
+  STROKE_MODES, ADDITIVE_MODES, SOFT_MODES, DASH_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
 } from './shaders.js';
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
 import { allTransformsCached, mobApply, mobScaleAt, isAffine, setCopyLimit } from './symmetry.js';
 import { warpActive, warpIndex } from './warp.js';
 import { solveWeave } from './weave.js';
 import { chainsCached } from './chains.js';
+import { seedOf } from './noise.js';
 
 export function hexToRgb(hex) {
   const h = String(hex || '#000').replace('#', '');
@@ -71,7 +72,7 @@ function program(gl, vs, fs) {
 // ?noinst in the page URL forces the per-copy fallback path (used by the tests)
 function o_noInstancing() { try { return /[?&]noinst\b/.test(location.search); } catch { return false; } }
 
-const INST_STRIDE = 9;   // a.re a.im b.re b.im | c.re c.im d.re d.im | conj
+const INST_STRIDE = 10;  // a.re a.im b.re b.im | c.re c.im d.re d.im | conj | draw-order index
 
 export class Renderer {
   constructor(canvas) {
@@ -330,12 +331,14 @@ export class Renderer {
     if (this.instData.length < n) this.instData = new Float32Array(Math.max(n, this.instData.length * 2));
     const d = this.instData;
     let o = 0;
-    for (const t of list) {
+    const inv = 1 / Math.max(1, list.length);
+    list.forEach((t, i) => {
       const m = t.mob;
       d[o++] = m.a[0]; d[o++] = m.a[1]; d[o++] = m.b[0]; d[o++] = m.b[1];
       d[o++] = m.c[0]; d[o++] = m.c[1]; d[o++] = m.d[0]; d[o++] = m.d[1];
       d[o++] = m.conj ? 1 : 0;
-    }
+      d[o++] = (i + 0.5) * inv;
+    });
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instBuf);
     gl.bufferData(gl.ARRAY_BUFFER, d.subarray(0, n), gl.DYNAMIC_DRAW);
@@ -348,11 +351,13 @@ export class Renderer {
     gl.vertexAttribPointer(P.att.i_mA, 4, gl.FLOAT, false, B, off);
     gl.vertexAttribPointer(P.att.i_mB, 4, gl.FLOAT, false, B, off + 16);
     gl.vertexAttribPointer(P.att.i_conj, 1, gl.FLOAT, false, B, off + 32);
+    if (P.att.i_idx !== undefined) gl.vertexAttribPointer(P.att.i_idx, 1, gl.FLOAT, false, B, off + 36);
   }
 
   /** Fallback path: one copy's coefficients as constant attribute values. */
-  constInstance(P, mob) {
+  constInstance(P, mob, idx = 0) {
     const gl = this.gl;
+    if (P.att.i_idx !== undefined) gl.vertexAttrib1f(P.att.i_idx, idx);
     gl.vertexAttrib4f(P.att.i_mA, mob.a[0], mob.a[1], mob.b[0], mob.b[1]);
     gl.vertexAttrib4f(P.att.i_mB, mob.c[0], mob.c[1], mob.d[0], mob.d[1]);
     gl.vertexAttrib1f(P.att.i_conj, mob.conj ? 1 : 0);
@@ -369,7 +374,8 @@ export class Renderer {
       this.pointInstances(P, a);
       this.inst.drawArraysInstancedANGLE(gl.TRIANGLES, first, count, b - a);
     } else {
-      for (let i = a; i < b; i++) { this.constInstance(P, list[i].mob); gl.drawArrays(gl.TRIANGLES, first, count); }
+      const inv = 1 / Math.max(1, list.length);
+      for (let i = a; i < b; i++) { this.constInstance(P, list[i].mob, (i + 0.5) * inv); gl.drawArrays(gl.TRIANGLES, first, count); }
     }
   }
 
@@ -492,14 +498,16 @@ export class Renderer {
     gl.useProgram(P.p);
     const mode = STROKE_MODES[st.mode] ?? 0;
     const additive = ADDITIVE_MODES.has(mode);
-    const ordered = !additive && mode !== STROKE_MODES.airbrush && st.overlap !== 'blend';
+    const soft = SOFT_MODES.has(mode) && st.overlap !== 'blend';
+    const ordered = !additive && !SOFT_MODES.has(mode) && st.overlap !== 'blend';
+    gl.uniform1f(P.uni.u_softZ, soft ? 1 : 0);
     const weaving = ordered && st.overlap === 'weave';
     if (weaving) this.weave(s, m, xsAll);
 
     this.uploadInstances(xs);
     const A = P.att, B = STROKE_STRIDE * 4;
     this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along].concat(weaving ? [A.a_weave] : []),
-      this.inst ? [A.i_mA, A.i_mB, A.i_conj] : []);
+      this.inst ? [A.i_mA, A.i_mB, A.i_conj, A.i_idx] : []);
     gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
     gl.vertexAttribPointer(A.a_pos, 2, gl.FLOAT, false, B, 0);
     gl.vertexAttribPointer(A.a_ext, 2, gl.FLOAT, false, B, 8);
@@ -526,6 +534,18 @@ export class Renderer {
       if (twist > 0) twist = Math.max(1, Math.round(twist * loopLen / 100)) * 100 / loopLen;
     }
     gl.uniform1f(P.uni.u_gradPeriod, period);
+    // brush pattern: dashes / dots and stitch spacing also fit a whole number of repeats around a loop
+    const fit = (len) => (loop ? loopLen / Math.max(1, Math.round(loopLen / Math.max(1e-3, len))) : len);
+    const dashMode = DASH_MODES[st.dash] ?? 0;
+    const dl = Math.max(0.5, +st.dashLen || 30), dg = Math.max(0, +st.dashGap || 0);
+    const dk = dashMode ? fit(dl + dg) / (dl + dg) : 1;
+    gl.uniform3f(P.uni.u_dash, dashMode, dl * dk, dg * dk);
+    gl.uniform1f(P.uni.u_strands, Math.max(1, Math.min(8, Math.round(+st.strands || 3))));
+    gl.uniform1f(P.uni.u_rough, Math.max(0, Math.min(1, +(st.rough ?? 0.5))));
+    gl.uniform1f(P.uni.u_outline, Math.max(0.05, Math.min(0.95, +(st.outline ?? 0.3))));
+    gl.uniform2f(P.uni.u_stitch, fit(Math.max(1, +st.stitchSpacing || 14)), +(st.stitchSlant ?? 0.6));
+    gl.uniform1f(P.uni.u_seed, (seedOf(s.id || 'x') % 997) * 0.731);
+    gl.uniform1f(P.uni.u_baseHw, Math.max(0.25, (+st.width || 18) * 0.5));
     gl.uniform1f(P.uni.u_loop, loop ? 1 : 0);
     gl.uniform3f(P.uni.u_light, light[0], light[1], light[2]);
     gl.uniform1f(P.uni.u_ambient, doc.light.ambient);
@@ -576,7 +596,22 @@ export class Renderer {
       }
     };
 
-    if (!ordered) {
+    if (soft) {
+      // translucent wash: each copy paints a pixel once (its own depth; equal depth fails LESS), copies
+      // still layer over earlier copies. Interiors first, then AA edges, so an edge never blocks an interior.
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(true);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LESS);
+      gl.uniform1f(P.uni.u_pass, 1);
+      drawCopies();
+      gl.depthMask(false);
+      gl.uniform1f(P.uni.u_pass, 2);
+      drawCopies();
+      gl.depthMask(true);
+      gl.disable(gl.DEPTH_TEST);
+    } else if (!ordered) {
       gl.blendFunc(gl.ONE, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform1f(P.uni.u_pass, 0);
       drawCopies();
