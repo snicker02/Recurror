@@ -16,6 +16,11 @@ export function defaultStyle() {
     mode: 'tube', width: 18, colA: '#f2c46d', colB: '#c2410c', grad: 'along', gradPeriod: 160,
     opacity: 1, pressure: 0.7, taperStart: 0.12, taperEnd: 0.25, cap: 'round',
     twist: 0.35, lines: 7, bevel: 0.45, glow: 1, overlap: 'later', weaveFlip: false,
+    // brush shape (any mode)
+    nibAngle: 45, nibRatio: 1, jitter: 0, jitterScale: 60, wobble: 0, wobbleScale: 120,
+    dash: 'none', dashLen: 30, dashGap: 18,
+    // mode-specific
+    strands: 3, rough: 0.5, outline: 0.3, stitchSpacing: 14, stitchSlant: 0.6,
   };
 }
 export function defaultFill() {

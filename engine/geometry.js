@@ -1,5 +1,6 @@
 // Recurror — stroke and fill tessellation (local / pre-symmetry space).
 import { sampleSpline } from './spline.js';
+import { strokeNoise, seedOf } from './noise.js';
 
 // Stroke vertex layout (floats):
 //   a_pos(2) a_ext(2) a_vc(2) a_tan(2) a_hw(1) a_along(2)  = 11
@@ -41,9 +42,22 @@ export function halfWidths(stroke, samples, closed, join = null) {
   const hw = new Float32Array(n);
   const base = Math.max(0.05, st.width * 0.5);
   const pAmt = st.pressure;
+  // brush shape: calligraphy nib (width follows the pen direction) and width jitter
+  const nibR = Math.max(0.03, Math.min(1, st.nibRatio ?? 1));
+  const nibA = -((st.nibAngle ?? 45) * Math.PI / 180);          // visual CCW, world y down
+  const jit = Math.max(0, Math.min(1, st.jitter ?? 0));
+  const jScale = Math.max(2, st.jitterScale ?? 60);
+  const seed = seedOf(stroke.id || 'x');
+  const env = brushEnvelope(stroke, cum, total, closed, join);
   for (let i = 0; i < n; i++) {
     const p = samples[i].p ?? 1;
     let f = 1 - pAmt + pAmt * p;
+    if (nibR < 1 && n > 1) {
+      const a = samples[Math.max(0, i - 1)], b = samples[Math.min(n - 1, i + 1)];
+      const th = Math.atan2(b.y - a.y, b.x - a.x);
+      f *= nibR + (1 - nibR) * Math.abs(Math.sin(th - nibA));
+    }
+    if (jit > 0) f *= Math.max(0.05, 1 + jit * 0.85 * env[i] * strokeNoise(cum[i], jScale, seed, closed ? total : 0));
     // skip tapering on strokes shorter than their own width (dots, tiny flicks)
     if (!closed && total > st.width) {
       const u = cum[i] / total;
@@ -54,6 +68,35 @@ export function halfWidths(stroke, samples, closed, join = null) {
     hw[i] = base * Math.max(0.02, f) * Math.max(0, samples[i].w ?? 1);
   }
   return { hw, cum, total };
+}
+
+/** 1 along the stroke, easing to 0 within ~2 widths of an end that links to another stroke. */
+function brushEnvelope(stroke, cum, total, closed, join) {
+  const n = cum.length - 1, env = new Float32Array(Math.max(n, 1)).fill(1);
+  if (closed || !join || (!join.s && !join.e)) return env;
+  const W = Math.max(4, stroke.style.width * 2);
+  for (let i = 0; i < n; i++) {
+    if (join.s) env[i] = Math.min(env[i], smooth01(0, W, cum[i]));
+    if (join.e) env[i] = Math.min(env[i], smooth01(0, W, total - cum[i]));
+  }
+  return env;
+}
+
+/** Wobble: displace the centreline along its normal with seeded noise (hand-drawn feel). */
+function wobbled(stroke, S, cum, total, closed, join) {
+  const st = stroke.style;
+  const amt = Math.max(0, Math.min(1, st.wobble ?? 0));
+  if (!(amt > 0) || S.length < 3) return S;
+  const scale = Math.max(4, st.wobbleScale ?? 120);
+  const seed = seedOf(stroke.id || 'x') + 7919;
+  const env = brushEnvelope(stroke, cum, total, closed, join);
+  const m = S.length, A = st.width * 0.6 * amt;
+  return S.map((p, i) => {
+    const a = closed ? S[(i - 1 + m) % m] : S[Math.max(0, i - 1)], b = closed ? S[(i + 1) % m] : S[Math.min(m - 1, i + 1)];
+    let tx = b.x - a.x, ty = b.y - a.y; const l = Math.hypot(tx, ty) || 1; tx /= l; ty /= l;
+    const d = A * env[i] * strokeNoise(cum[i], scale, seed, closed ? total : 0);
+    return { ...p, x: p.x - ty * d, y: p.y + tx * d };
+  });
 }
 
 /**
@@ -71,12 +114,27 @@ export function buildStrokeMesh(stroke, join = null) {
   if (n === 1) S = [samples[0], { x: samples[0].x + 0.01, y: samples[0].y, p: samples[0].p }];
   const m = S.length;
   const { hw, cum, total } = halfWidths(stroke, S, closed && n > 2, join);
+  // wobble moves the drawn centreline only; arc lengths stay those of the spline (gradients, dashes, chains)
+  S = wobbled(stroke, S, cum, total, closed && n > 2, join);
   let maxHw = 0;
   for (let i = 0; i < m; i++) maxHw = Math.max(maxHw, hw[i]);
 
   // tangents & miters
   const tx = new Float32Array(m), ty = new Float32Array(m);
   const mx = new Float32Array(m), my = new Float32Array(m);
+  // inner-edge limit at tight bends: the inner side may not extrude past the centre of curvature,
+  // otherwise the strip folds into bow-ties (notches in solid modes, double-painted fans in washes)
+  const inner = new Int8Array(m), innerK = new Float32Array(m).fill(1);
+  const ringM = closed && n > 2;
+  const at = (j) => (ringM ? S[((j % m) + m) % m] : S[Math.max(0, Math.min(m - 1, j))]);
+  for (let i = 0; i < m; i++) {
+    const a = at(i - 2), b = S[i], c = at(i + 2);
+    const cr = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (Math.abs(cr) < 1e-9) continue;
+    const rho = Math.hypot(b.x - a.x, b.y - a.y) * Math.hypot(c.x - b.x, c.y - b.y) * Math.hypot(c.x - a.x, c.y - a.y) / (2 * Math.abs(cr));
+    inner[i] = cr > 0 ? 1 : -1;
+    innerK[i] = rho;                                  // radius for now; turned into a factor below
+  }
   for (let i = 0; i < m; i++) {
     let prev, next;
     if (closed && n > 2) { prev = S[(i - 1 + m) % m]; next = S[(i + 1) % m]; }
@@ -105,6 +163,10 @@ export function buildStrokeMesh(stroke, join = null) {
     const segNx = -oy, segNy = ox;
     const dd = Math.max(nx * segNx + ny * segNy, 1 / 3);
     mx[i] = nx / dd; my[i] = ny / dd;
+    if (inner[i]) {
+      const reach = hw[i] * Math.hypot(mx[i], my[i]);
+      innerK[i] = reach > 0 ? Math.min(1, 0.9 * innerK[i] / reach) : 1;
+    }
   }
 
   const ring = closed && n > 2;
@@ -130,7 +192,22 @@ export function buildStrokeMesh(stroke, join = null) {
     data[o++] = hw[i];
     data[o++] = len / totalLen; data[o++] = len;
   };
-  const body = (i, side, len) => put(i, side, 0, mx[i] * side, my[i] * side, len);
+  // calligraphy nib: each side is offset along the fixed nib (normal + (cos/f)·tangent), giving the
+  // slanted swept-pen envelope; the perpendicular reach stays exactly hw, so edge anti-aliasing holds
+  const nibR = Math.max(0.03, Math.min(1, stroke.style.nibRatio ?? 1));
+  const nibA = -((stroke.style.nibAngle ?? 45) * Math.PI / 180);
+  const ux = Math.cos(nibA), uy = Math.sin(nibA);
+  const slide = new Float32Array(m);
+  if (nibR < 1) for (let i = 0; i < m; i++) {
+    const nx = -ty[i], ny = tx[i];
+    let sn = ux * nx + uy * ny, c = ux * tx[i] + uy * ty[i];
+    if (sn < 0) { sn = -sn; c = -c; }
+    slide[i] = c / (nibR + (1 - nibR) * sn);
+  }
+  const body = (i, side, len) => {
+    const k = side === inner[i] && nibR >= 1 ? innerK[i] : 1;   // the swept nib envelope doesn't fold like a round brush
+    put(i, side, 0, (mx[i] * k + tx[i] * slide[i]) * side, (my[i] * k + ty[i] * slide[i]) * side, len);
+  };
 
   for (let k = 0; k < segs; k++) {
     const a = k, b = (k + 1) % m;
@@ -230,5 +307,5 @@ export function boundCircle(stroke) {
   for (const p of sm) r = Math.max(r, Math.hypot(p.x - cx, p.y - cy));
   let wmax = 1;
   for (const p of stroke.points) wmax = Math.max(wmax, p.w ?? 1);
-  return { x: cx, y: cy, r: r + stroke.style.width * 0.5 * wmax };
+  return { x: cx, y: cy, r: r + stroke.style.width * (0.5 * wmax * (1 + 0.85 * (stroke.style.jitter ?? 0)) + 0.6 * (stroke.style.wobble ?? 0)) };
 }
