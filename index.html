@@ -58,13 +58,25 @@
   <aside id="panel">
     <details open id="bucketSection" data-show="ui.tool=bucket">
       <summary>Bucket <span class="hint">(fill tool)</span></summary>
-      <div class="row"><label>Colour</label><input type="color" data-bind="ui.bucketCol"></div>
+      <div class="row"><label>Fill</label>
+        <select data-bind="bfill.mode">
+          <optgroup label="Colour"><option value="flat">Flat</option><option value="linear">Linear gradient</option><option value="radial">Radial gradient</option><option value="dome">Dome (lit)</option></optgroup>
+          <optgroup label="Texture"><option value="noise">Noise</option><option value="hatch">Hatch</option><option value="cross">Cross-hatch</option><option value="dots">Dots</option><option value="cells">Cells</option><option value="marble">Marble</option></optgroup>
+        </select></div>
+      <div class="row"><label>Colour A</label><input type="color" data-bind="bfill.colA"></div>
+      <div class="row" data-show="bfill.mode=linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Colour B</label><input type="color" data-bind="bfill.colB"></div>
+      <div class="row" data-show="bfill.mode=linear|noise|hatch|cross|dots|cells|marble"><label>Angle</label><input type="range" min="0" max="360" step="1" data-bind="bfill.angle"><output></output></div>
+      <div class="row" data-show="bfill.mode=noise|hatch|cross|dots|cells|marble"><label>Scale</label><input type="range" min="2" max="400" step="0.5" data-bind="bfill.scale"><output></output></div>
+      <div class="row" data-show="bfill.mode=noise|hatch|cross|dots|cells|marble"><label title="Line weight, dot size, contrast or turbulence">Weight</label><input type="range" min="0" max="1" step="0.01" data-bind="bfill.thick"><output></output></div>
+      <div class="row" data-show="bfill.mode=flat|linear|radial|noise|hatch|cross|dots|cells|marble"><label>Lit (dome)</label><input type="checkbox" data-bind="bfill.lit"></div>
+      <div class="row"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="bfill.opacity"><output></output></div>
+      <div class="btns"><button data-act="bucketFromFill" title="Copy the Fill panel's settings into the bucket">Use Fill panel settings</button></div>
       <div class="row"><label title="How different a colour may be and still count as the same area (0–255)">Tolerance</label><input type="range" min="0" max="200" step="1" data-bind="ui.bucketTol"><output></output></div>
       <div class="row"><label title="Close breaks in the lines up to about twice this wide (drawing units), so the fill doesn't leak out">Gap close</label><input type="range" min="0" max="20" step="0.5" data-bind="ui.bucketGap"><output></output></div>
       <div class="row"><label title="Fill the matching area in every symmetric copy (uses the current symmetry settings)">Symmetric copies</label><input type="checkbox" data-bind="ui.bucketSym"></div>
       <div class="row"><label title="Use the symmetry cell walls as borders too: the fill stops at the walls of the cell you click, and its copies fill the matching parts of the other cells (mirror, rotational, kaleidoscope, wallpaper and hyperbolic symmetry)">Crop to cell</label><input type="checkbox" data-bind="ui.bucketCrop"></div>
       <div class="row"><label title="Fills of empty areas go to the bottom of the active layer, under its lines.">Under the lines</label><input type="checkbox" data-bind="ui.bucketUnder"></div>
-      <p class="hint">Click a closed area to fill it, or click on a line to recolour the line itself (its shading stays). Click a fill again to recolour it; select it with Edit to delete it.</p>
+      <p class="hint">Click a closed area to fill it, or click on a line to recolour the line itself (its shading stays). Click a fill again to restyle it; select it with Edit to delete it.</p>
     </details>
 
     <details open>
