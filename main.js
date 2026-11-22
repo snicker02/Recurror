@@ -7,13 +7,13 @@ import {
   newDocument, makeStroke, touch, normaliseDoc, serialise, History,
   defaultStyle, defaultFill, defaultShape, defaultLayer, nextRev, newId, syncGroup,
 } from './engine/document.js';
-import { defaultSym, defaultRec, allTransformsCached, transformsFor, mobInverse, mobApply, mobScaleAt, hyperbolicValid, copyLimit, cropDomain, cropKeeps, symKey } from './engine/symmetry.js';
+import { defaultSym, defaultRec, allTransformsCached, transformsFor, mobInverse, mobApply, mobScaleAt, hyperbolicValid, copyLimit, cropDomain, cropKeeps, symKey, CROP_MODES } from './engine/symmetry.js';
 import { defaultWarp, warpActive, warpInverse, warpPoint, WARPS, WARP_LABELS } from './engine/warp.js';
 import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js';
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.8.4';
+export const VERSION = '2.8.5';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -43,7 +43,7 @@ const tpl = {
   shape: defaultShape(), style: defaultStyle(), fill: defaultFill(),
   sym: defaultSym(doc.width, doc.height), rec: defaultRec(), warp: defaultWarp(),
 };
-const ui = { bucketCol: '#000000', bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
+const ui = { bucketCrop: false, bucketCol: '#000000', bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
 const view = { zoom: 1, panX: 0, panY: 0, dpr: 1, cssW: 1, cssH: 1 };
 
 let selection = [];          // selected strokes
@@ -560,10 +560,10 @@ function bound(s) {
 /** Hit test across every copy of every editable stroke, topmost first. */
 const cropMemo = new Map();
 function cropOf(s) {
-  const key = s.rev + '|' + symKey(s.sym, doc.width, doc.height) + '|' + s.sym.hR;
+  const key = s.rev + '|' + symKey(s.sym, doc.width, doc.height) + '|' + s.sym.hR + '|' + (s.cropAt ? s.cropAt.x + ',' + s.cropAt.y : '');
   const hit = cropMemo.get(s.id);
   if (hit && hit.key === key) return hit.D;
-  const D = cropDomain(s.sym, getSamples(s), doc.width, doc.height);
+  const D = cropDomain(s.sym, getSamples(s), doc.width, doc.height, s.cropAt || null);
   if (cropMemo.size > 2000) cropMemo.clear();
   cropMemo.set(s.id, { key, D });
   return D;
@@ -1407,9 +1407,10 @@ function bucketFill(w) {
   if (poly.length < 3) { flashHint('That area is too small to fill.'); return; }
   const sym = clone(tpl.sym);
   if (!ui.bucketSym) sym.mode = 'none';
-  // the traced area is exact already: cropping it to one cell would keep only the piece inside
-  // that cell, so its copies would fill only parts of the matching areas
-  sym.crop = false;
+  // Crop to cell (option): the fill keeps only the part of the area inside the cell that was
+  // clicked, and its copies fill the matching parts of the other cells, so the cell walls bound
+  // the fill like lines do. Off: the traced area is used whole.
+  sym.crop = !!(ui.bucketCrop && ui.bucketSym && CROP_MODES.has(sym.mode));
   // The region was found in the warped picture. Store it in pre-warp coordinates and give the fill
   // the same warp, so it lands back on the region and its symmetric copies are warped like the lines.
   const warp = warpActive(tpl.warp) ? clone(tpl.warp) : defaultWarp();
@@ -1432,6 +1433,10 @@ function bucketFill(w) {
   };
   const s = makeStroke(poly, t, L.id);
   s.bucket = true;
+  if (sym.crop) {
+    const a = warpActive(warp) ? unwarp(warp, sym, w.x, w.y) : { x: w.x, y: w.y };
+    s.cropAt = { x: +a.x.toFixed(2), y: +a.y.toFixed(2) };
+  }
   // on a line's own body: colour the line itself (its shading and ink stay on top of the new colour);
   // inside a shape's fill: a new fill just above that shape; in an empty area: under all the layer's lines
   let at = -1;

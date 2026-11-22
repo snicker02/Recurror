@@ -382,10 +382,10 @@ export class Renderer {
   cropFor(doc, s) {
     if (!s.sym || !s.sym.crop) return null;
     if (!this.cropCache) this.cropCache = new Map();
-    const key = s.rev + '|' + symKey(s.sym, doc.width, doc.height) + '|' + s.sym.hR;
+    const key = s.rev + '|' + symKey(s.sym, doc.width, doc.height) + '|' + s.sym.hR + '|' + (s.cropAt ? s.cropAt.x + ',' + s.cropAt.y : '');
     const hit = this.cropCache.get(s.id);
     if (hit && hit.key === key) return hit.D;
-    const D = cropDomain(s.sym, getSamples(s), doc.width, doc.height);
+    const D = cropDomain(s.sym, getSamples(s), doc.width, doc.height, s.cropAt || null);
     if (this.cropCache.size > 2000) this.cropCache.clear();
     this.cropCache.set(s.id, { key, D });
     return D;
