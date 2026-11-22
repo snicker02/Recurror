@@ -13,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.12.0';
+export const VERSION = '2.13.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -134,6 +134,8 @@ const PRESETS = {
   'Spray paint': { mode: 'stamp', colA: '#22c55e', colB: '#22c55e', grad: 'none', width: 40, pressure: 0.3, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'splatter', stampSpacing: 0.18, stampScatter: 0.9, stampRot: 1, stampSizeJit: 0.6, stampFlow: 0.8, tooth: 0.2, overlap: 'blend', opacity: 1 },
   'Sponge': { mode: 'stamp', colA: '#a855f7', colB: '#a855f7', grad: 'none', width: 48, pressure: 0.2, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'sponge', stampSpacing: 0.55, stampScatter: 0.25, stampRot: 1, stampSizeJit: 0.3, stampFlow: 0.75, tooth: 0.4, overlap: 'blend', opacity: 1 },
   'Wet wash': { mode: 'watercolor', colA: '#2b6cb0', colB: '#7fb3e0', grad: 'along', width: 46, pressure: 0.4, taperStart: 0.05, taperEnd: 0.1, cap: 'round', rough: 0.4, spread: 48, wetEdge: 0.75, bloom: 0.7, granulate: 0.6, tooth: 0.5, opacity: 0.8 },
+  'Celtic band': { knot: true, mode: 'flat', colA: '#e9d7a8', colB: '#e9d7a8', grad: 'none', width: 22, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'weave', ink: 2.2, inkCol: '#2a1a0a', shadeEdge: 0.25, shadeGrain: 0.3, shadeCol: '#5a3d1a', opacity: 1 },
+  'Celtic cord': { knot: true, mode: 'tube', colA: '#d4a017', colB: '#8b5a00', grad: 'across', width: 18, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'weave', ink: 1.4, inkCol: '#2a1a0a', opacity: 1 },
   'Cross stitch': { mode: 'stitch', colA: '#fca5a5', colB: '#b91c1c', grad: 'none', width: 18, stitchSpacing: 12, stitchSlant: 0.9, taperStart: 0, taperEnd: 0, opacity: 1 },
 };
 
@@ -280,6 +282,7 @@ function updateUndo() {
 function getSource(root) {
   if (TPL_ROOTS.has(root)) return tpl[root];
   if (root === 'bfill') return ui.bucketFill;
+  if (root === 'layer') return activeLayer();
   if (root === 'light') return doc.light;
   if (root === 'doc') return doc;
   if (root === 'ui') return ui;
@@ -436,11 +439,15 @@ function bindPanel() {
   const preset = $('#preset');
   for (const name of Object.keys(PRESETS)) preset.appendChild(Object.assign(document.createElement('option'), { value: name, textContent: name }));
   preset.addEventListener('change', () => {
-    const p = PRESETS[preset.value];
-    if (!p) return;
+    const pr = PRESETS[preset.value];
+    if (!pr) return;
+    const { knot, ...p } = pr;
     Object.assign(tpl.style, SHAPE_RESET, p);
     for (const s of selection) { Object.assign(s.style, SHAPE_RESET, p); touch(s); }
-    if (selection.length) commit();
+    // knot presets weave the whole layer
+    const L = activeLayer();
+    if (knot && !L.knot) { L.knot = true; flashHint(`“${L.name}” is now a knot layer: every strand in it weaves over and under the others.`); }
+    if (selection.length || knot) commit();
     preset.value = '';
     refreshPanel();
   });

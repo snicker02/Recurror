@@ -6,7 +6,7 @@ import {
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
 import { allTransformsCached, transformsFor, mobApply, mobScaleAt, isAffine, setCopyLimit, cropDomain, symKey } from './symmetry.js';
 import { warpActive, warpIndex } from './warp.js';
-import { solveWeave } from './weave.js';
+import { solveWeave, solveKnot } from './weave.js';
 import { chainsCached } from './chains.js';
 import { seedOf } from './noise.js';
 
@@ -81,6 +81,13 @@ function invView(m) {
   const ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
   return new Float32Array([ia, ib, 0, ic, id, 0, -(ia * tx + ic * ty), -(ib * tx + id * ty), 1]);
 }
+
+/** Strokes drawn with depth-ordered overlaps (the ones a knot weaves). */
+function isOrderedStyle(st) {
+  const mode = STROKE_MODES[st.mode] ?? 0;
+  return st.mode !== 'none' && st.opacity > 0 && !ADDITIVE_MODES.has(mode) && !SOFT_MODES.has(mode) && st.overlap !== 'blend';
+}
+function hashStr(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
 
 /** A watercolour stroke whose wash spreads (painted wet, then simulated). */
 const isWet = (s) => s.style.mode === 'watercolor' && (+s.style.spread || 0) > 0;
@@ -200,6 +207,55 @@ export class Renderer {
     return m;
   }
 
+  /** A layer's strokes in order, or, for a knot layer, woven together: fills first, then the
+   *  strands in three shared-depth passes (depth, interiors, edges), then anything not woven. */
+  drawLayerStrokes(doc, layer, list, o) {
+    const gl = this.gl;
+    if (!layer.knot) { for (const s of list) this.drawStroke(doc, s, o); return; }
+    const strands = list.filter((s) => isOrderedStyle(s.style));
+    if (!strands.length) { for (const s of list) this.drawStroke(doc, s, o); return; }
+    const knot = this.knotFor(doc, layer, strands);
+    for (const s of list) this.drawStroke(doc, s, { ...o, only: 'fill' });
+    gl.depthMask(true);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    for (const pass of [1, 2, 3]) for (const s of strands) this.drawStroke(doc, s, { ...o, only: 'stroke', knot, knotPass: pass });
+    for (const s of list) if (!isOrderedStyle(s.style)) this.drawStroke(doc, s, { ...o, only: 'stroke' });
+  }
+
+  /** Upload a knot strand's heights (from the layer-wide solution) as the weave attribute. */
+  knotHeights(stroke, m, knot) {
+    const key = 'knot|' + knot.key;
+    if (m.weaveKey === key) return;
+    const W = knot.sol.get(stroke.id);
+    const h = new Float32Array(m.count);
+    for (let i = 0; i < m.count; i++) h[i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]);
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, h, gl.STATIC_DRAW);
+    m.weaveKey = key;
+    m.weaveInfo = { crossings: W.crossings, nodes: W.nodes.length, alternations: 0, kept: 0 };
+  }
+
+  /** Solve (or reuse) the weave of a knot layer's strands. */
+  knotFor(doc, layer, strands) {
+    if (!this.knotCache) this.knotCache = new Map();
+    const parts = [];
+    const input = strands.map((s) => {
+      const ch = this.chains ? this.chains.get(s.id) || null : null;
+      const m = this.mesh(s, ch);
+      const cropD = this.cropFor(doc, s);
+      const xs = transformsFor(s.sym, s.rec, doc.width, doc.height, cropD ? { x: cropD.c[0], y: cropD.c[1] } : m.bound);
+      parts.push(s.id + ':' + sampleRev(s) + ':' + xs.key + ':' + (s.style.weaveFlip ? 1 : 0) + ':' + m.maxHw.toFixed(3));
+      return { id: s.id, samples: getSamples(s), closed: isClosed(s), xs, maxHw: m.maxHw, flip: !!s.style.weaveFlip };
+    });
+    const key = parts.join('|');
+    const hit = this.knotCache.get(layer.id);
+    if (hit && hit.full === key) return hit;
+    const v = { full: key, key: layer.id + '#' + hashStr(key), sol: solveKnot(input) };
+    this.knotCache.set(layer.id, v);
+    return v;
+  }
+
   weave(stroke, m, xs) {
     const st = stroke.style;
     const key = xs.key + '|' + (st.weaveFlip ? 1 : 0);
@@ -305,7 +361,7 @@ export class Renderer {
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.A.fbo);
         scissor();
         if (wetTex) this.blitOver(wetTex);
-        for (const s of dry) this.drawStroke(doc, s, o);
+        this.drawLayerStrokes(doc, layer, dry, o);
       } else {
         this.ensureExtra(T);
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.L.fbo);
@@ -314,7 +370,7 @@ export class Renderer {
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
         scissor();
         if (wetTex) this.blitOver(wetTex);
-        for (const s of dry) this.drawStroke(doc, s, o);
+        this.drawLayerStrokes(doc, layer, dry, o);
         // composite L over A → B, then swap
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.B.fbo);
         scissor();
@@ -632,7 +688,7 @@ export class Renderer {
     // Even-odd stencilling needs each copy on its own, so copies are drawn in batches whose image
     // circles don't overlap: one instanced call per batch and pass, still one copy's parity per pixel.
     const f = s.fill;
-    if (m.fill && f && f.mode !== 'none' && f.opacity > 0) {
+    if (o.only !== 'stroke' && m.fill && f && f.mode !== 'none' && f.opacity > 0) {
       const P = this.progFill;
       const fm = m.fill;
       const looks = levelLooks(f.colA, f.colB, f.opacity, rec, levels);
@@ -695,7 +751,7 @@ export class Renderer {
 
     // ---- stroke ----
     const st = s.style;
-    if (!m.count || st.mode === 'none' || st.opacity <= 0) return;
+    if (o.only === 'fill' || !m.count || st.mode === 'none' || st.opacity <= 0) return;
     const P = this.progStroke;
     gl.useProgram(P.p);
     const mode = STROKE_MODES[st.mode] ?? 0;
@@ -703,8 +759,11 @@ export class Renderer {
     const soft = SOFT_MODES.has(mode) && st.overlap !== 'blend';
     const ordered = !additive && !SOFT_MODES.has(mode) && st.overlap !== 'blend';
     gl.uniform1f(P.uni.u_softZ, soft ? 1 : 0);
-    const weaving = ordered && st.overlap === 'weave';
-    if (weaving) this.weave(s, m, xsAll);
+    // knot layer: every strand of the layer is woven with every other (heights from solveKnot)
+    const knotted = ordered && o.knot && o.knot.sol.has(s.id);
+    const weaving = knotted || (ordered && st.overlap === 'weave');
+    if (knotted) this.knotHeights(s, m, o.knot);
+    else if (weaving) this.weave(s, m, xsAll);
 
     this.uploadInstances(xs);
     const A = P.att, B = STROKE_STRIDE * 4;
@@ -845,6 +904,24 @@ export class Renderer {
       gl.blendFunc(gl.ONE, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform1f(P.uni.u_pass, 0);
       drawCopies();
+    } else if (knotted) {
+      // one pass of the layer-wide knot: depth is shared by all its strands, cleared once per layer
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      if (o.knotPass === 1) {
+        gl.depthMask(true);
+        gl.uniform1f(P.uni.u_pass, 1);
+        gl.colorMask(false, false, false, false);
+        drawCopies();
+        gl.colorMask(true, true, true, true);
+      } else {
+        gl.depthMask(false);
+        gl.uniform1f(P.uni.u_pass, o.knotPass === 2 ? 1 : 2);
+        drawCopies();
+        gl.depthMask(true);
+      }
+      gl.disable(gl.DEPTH_TEST);
     } else {
       // depth prepass on fully covered pixels → interiors that won → AA fringes on top
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);

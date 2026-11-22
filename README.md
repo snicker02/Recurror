@@ -64,6 +64,8 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 
 **Frieze** (strip patterns): the 7 frieze groups, for borders and braids. p1 hop (translation), p11g step (glide), p1m1 sidle (mirrors across the strip), p11m jump (mirror along it), p2 spinning hop (half turns), p2mg spinning sidle and p2mm spinning jump. Set the **Repeat** length and the **Strip angle**; the guides show the centre line, the repeat lines, the mirrors and the half-turn centres. Crop to cell, recursion, the bucket and snapping all work with it.
 
+**Knot layer** (Layers panel): every strand in the layer, and all their symmetric copies, weave over and under each other Celtic-knot style, alternating at each crossing. Each stroke keeps one height profile for all its copies; crossings between strokes and copies are solved together (opposite heights at every crossing, alternation along every strand), and the layer's strands share one depth buffer drawn in three passes. Fills go underneath; washes, glows and draw-order strokes are drawn after, unwoven. The **Celtic band** and **Celtic cord** presets turn the active layer into a knot layer.
+
 ## Recursion (per stroke)
 
 - **Nest**: Mᴸ ∘ G, so the whole figure repeats inside itself.
@@ -217,6 +219,8 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.13.0**: Knot layers: Celtic-knot weaving across all the strands of a layer and their copies, with Celtic band and Celtic cord presets.
 
 - **2.12.0**: Wet watercolour: washes spread, gather pigment at the wet edge, granulate and bleed into each other (per layer, under its other strokes).
 
