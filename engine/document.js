@@ -1,5 +1,5 @@
 // Recurror — document model, defaults, migration, history, serialisation.
-import { defaultSym, defaultRec, WALLPAPER } from './symmetry.js';
+import { defaultSym, defaultRec, WALLPAPER, FRIEZE } from './symmetry.js';
 import { defaultWarp } from './warp.js';
 
 export const FORMAT = 'recurror-doc';
@@ -58,6 +58,7 @@ function migrateSym(sym, w, h) {
   const s = Object.assign(defaultSym(w, h), sym || {});
   if (s.mode === 'tile') { s.mode = 'wallpaper'; s.wp = sym.tileMirror ? 'pmm' : 'p1'; s.cellAngle = 90; }
   if (!WALLPAPER[s.wp]) s.wp = 'p6m';
+  if (!FRIEZE[s.fr]) s.fr = 'p2mm';
   delete s.tileMirror;
   return s;
 }

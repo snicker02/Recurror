@@ -1,5 +1,5 @@
 // Recurror — symmetry guides as world-space geometry (post-warp). Shared by the overlay and snapping.
-import { latticeBasis, WALLPAPER, hyperbolicFrame, symTransforms, mobApply, inversionCircles, childCentres } from './symmetry.js';
+import { latticeBasis, WALLPAPER, FRIEZE, friezeFrame, hyperbolicFrame, symTransforms, mobApply, inversionCircles, childCentres } from './symmetry.js';
 import { warpPoint, warpActive } from './warp.js';
 
 const seg = (a, b, n) => { const out = []; for (let i = 0; i <= n; i++) out.push({ x: a.x + (b.x - a.x) * i / n, y: a.y + (b.y - a.y) * i / n }); return out; };
@@ -32,6 +32,29 @@ export function buildGuides(sym, rec, warp, W, H) {
         pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
       }
       lines.push({ pts, kind: 'ray' });
+      break;
+    }
+    case 'frieze': {
+      const g = FRIEZE[sym.fr] || FRIEZE.p1;
+      const { e1, e2, L } = friezeFrame(sym);
+      const P = (u, v) => ({ x: cx + e1[0] * u + e2[0] * v, y: cy + e1[1] * u + e2[1] * v });
+      const along = g.ops.some(([su, sv, tu]) => su === 1 && sv === -1 && tu === 0);   // mirror along the centre line
+      lines.push({ pts: seg(P(-diag, 0), P(diag, 0), 96), kind: along ? 'mirror' : 'ray' });
+      const across = g.ops.some(([su, sv, tu]) => su === -1 && sv === 1);              // mirrors across the strip
+      const k0 = Math.floor(-diag / L) - 1, k1 = Math.ceil(diag / L) + 1;
+      if ((k1 - k0) < 4000) for (let k = k0; k <= k1; k++) {
+        lines.push({ pts: seg(P(k * L, -diag), P(k * L, diag), 48), kind: 'cell' });
+        if (across) {
+          const off = (g.ops.find(([su, sv]) => su === -1 && sv === 1)[2] || 0) * L / 2;
+          lines.push({ pts: seg(P(k * L + off, -diag), P(k * L + off, diag), 48), kind: 'mirror' });
+          lines.push({ pts: seg(P(k * L + off + L / 2, -diag), P(k * L + off + L / 2, diag), 48), kind: 'mirror' });
+        }
+        // half-turn centres and glide marks along the centre line
+        if (g.ops.some(([su, sv]) => su === -1 && sv === -1)) {
+          const t = g.ops.find(([su, sv]) => su === -1 && sv === -1)[2] * L / 2;
+          points.push({ ...P(k * L + t, 0), kind: 'node' }, { ...P(k * L + t + L / 2, 0), kind: 'node' });
+        }
+      }
       break;
     }
     case 'wallpaper': {

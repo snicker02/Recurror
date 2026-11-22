@@ -94,7 +94,7 @@ const about = (cx, cy, m) => mul(translate(cx, cy), mul(m, translate(-cx, -cy)))
 // ---------------------------------------------------------------------------
 // defaults
 // ---------------------------------------------------------------------------
-export const SYM_MODES = ['none', 'mirror', 'rotate', 'kaleido', 'spiral', 'wallpaper', 'hyperbolic', 'inversion'];
+export const SYM_MODES = ['none', 'mirror', 'rotate', 'kaleido', 'spiral', 'frieze', 'wallpaper', 'hyperbolic', 'inversion'];
 export const MAX_TOTAL = 4000;          // cap for a base group (lattice cells, hyperbolic tiles, inversion words)
 let COPY_LIMIT = MAX_TOTAL;             // cap for group × recursion (raised when the renderer can instance)
 export function setCopyLimit(n) { COPY_LIMIT = Math.max(MAX_TOTAL, n | 0); allCache.clear(); }
@@ -107,6 +107,8 @@ export function defaultSym(w = 2048, h = 2048) {
     ratio: 0.92, steps: 24,
     // wallpaper
     wp: 'p6m', tileDX: 256, tileDY: 256, cellAngle: 75,
+    // frieze (strip patterns): group, repeat length, strip direction (degrees, 0 = left to right)
+    fr: 'p2mm', frLen: 220, frAngle: 0,
     // hyperbolic {p,q}
     hp: 7, hq: 3, hR: Math.min(w, h) * 0.46, hRefl: true, hDepth: 40,
     // circle inversion
@@ -379,6 +381,63 @@ function euclidTransforms(sym, w, h) {
       break;
     }
     case 'wallpaper': return wallpaperTransforms(sym, w, h);
+    case 'frieze': return friezeTransforms(sym, w, h);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// 7 frieze groups. In the strip frame (u along the strip, v across it) every operation is
+// u' = su·u + tu·L, v' = sv·v: translations by L, plus mirrors across (su = −1), the mirror along
+// the centre line (sv = −1), glides (sv = −1, tu = ½) and half turns (su = sv = −1).
+// ---------------------------------------------------------------------------
+export const FRIEZE = {
+  p1: { label: 'p1 · hop (translation)', ops: [[1, 1, 0]] },
+  p11g: { label: 'p11g · step (glide)', ops: [[1, 1, 0], [1, -1, 0.5]] },
+  p1m1: { label: 'p1m1 · sidle (mirrors across)', ops: [[1, 1, 0], [-1, 1, 0]] },
+  p11m: { label: 'p11m · jump (mirror along)', ops: [[1, 1, 0], [1, -1, 0]] },
+  p2: { label: 'p2 · spinning hop (half turns)', ops: [[1, 1, 0], [-1, -1, 0]] },
+  p2mg: { label: 'p2mg · spinning sidle', ops: [[1, 1, 0], [-1, 1, 0], [1, -1, 0.5], [-1, -1, 0.5]] },
+  p2mm: { label: 'p2mm · spinning jump', ops: [[1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0]] },
+};
+
+const FRIEZE_ACROSS = 1e5;   // the pseudo-lattice's cell across the strip: wider than any drawing
+/** Frieze as a lattice: a across the strip (one huge cell), b one repeat along it. */
+export function friezeLattice(sym) {
+  const { e1, e2, L } = friezeFrame(sym);
+  return { a: [e2[0] * FRIEZE_ACROSS, e2[1] * FRIEZE_ACROSS], b: [e1[0] * L, e1[1] * L] };
+}
+
+/** Strip frame: unit vector along the strip, unit vector across it, repeat length. */
+export function friezeFrame(sym) {
+  const A = (+sym.frAngle || 0) * Math.PI / 180;
+  const e1 = [Math.cos(A), -Math.sin(A)], e2 = [Math.sin(A), Math.cos(A)];   // e2 = e1 turned a quarter (down for a level strip)
+  return { e1, e2, L: Math.max(8, +sym.frLen || 220) };
+}
+
+function friezeTransforms(sym, w, h) {
+  const g = FRIEZE[sym.fr] || FRIEZE.p1;
+  const { e1, e2, L } = friezeFrame(sym);
+  const cx = +sym.cx, cy = +sym.cy;
+  // F = [e1 e2] (column-major), op = F diag(su, sv) Fᵀ about the centre, then tu·L along e1
+  const opsW = g.ops.map(([su, sv, tu]) => {
+    const m00 = su * e1[0] * e1[0] + sv * e2[0] * e2[0], m01 = su * e1[0] * e1[1] + sv * e2[0] * e2[1];
+    const m11 = su * e1[1] * e1[1] + sv * e2[1] * e2[1];
+    const Lm = [m00, m01, m01, m11, 0, 0];
+    return mul(translate(cx + e1[0] * tu * L, cy + e1[1] * tu * L), mul(Lm, translate(-cx, -cy)));
+  });
+  let t0 = Infinity, t1 = -Infinity;
+  for (const [px, py] of [[0, 0], [w, 0], [0, h], [w, h]]) {
+    const t = ((px - cx) * e1[0] + (py - cy) * e1[1]) / L;
+    t0 = Math.min(t0, t); t1 = Math.max(t1, t);
+  }
+  const ns = [];
+  for (let n = Math.floor(t0) - 1; n <= Math.ceil(t1) + 1; n++) ns.push(n);
+  ns.sort((a, b) => Math.abs(a) - Math.abs(b));
+  const out = [];
+  for (const n of ns) {
+    const T = translate(e1[0] * n * L, e1[1] * n * L);
+    for (const op of opsW) { if (out.length >= MAX_TOTAL) return out; out.push(mul(T, op)); }
   }
   return out;
 }
@@ -497,6 +556,7 @@ export function symKey(sym, w, h) {
     case 'rotate': case 'kaleido': k.push(sym.n); break;
     case 'spiral': k.push(sym.n, sym.ratio, sym.steps); break;
     case 'wallpaper': k.push(sym.wp, sym.tileDX, sym.tileDY, sym.cellAngle); break;
+    case 'frieze': k.push(sym.fr, sym.frLen, sym.frAngle); break;
     case 'hyperbolic': k.push(sym.hp, sym.hq, sym.hR, sym.hRefl, sym.hDepth); break;
     case 'inversion': k.push(sym.invK, sym.invD, sym.invR, sym.invHub, sym.invDepth, sym.invRing); break;
   }
@@ -531,8 +591,8 @@ export function allTransformsCached(sym, rec, w, h) {
 const shiftCache = new Map();
 export function transformsFor(sym, rec, w, h, anchor) {
   const xs = allTransformsCached(sym, rec, w, h);
-  if (!sym || sym.mode !== 'wallpaper' || (rec && rec.mode !== 'off') || !anchor) return xs;
-  const { a, b } = latticeBasis(sym);
+  if (!sym || (sym.mode !== 'wallpaper' && sym.mode !== 'frieze') || (rec && rec.mode !== 'off') || !anchor) return xs;
+  const { a, b } = sym.mode === 'frieze' ? friezeLattice(sym) : latticeBasis(sym);
   const det = a[0] * b[1] - a[1] * b[0];
   const dx = anchor.x - +sym.cx, dy = anchor.y - +sym.cy;
   const ni = Math.round((b[1] * dx - b[0] * dy) / det), nj = Math.round((-a[1] * dx + a[0] * dy) / det);
@@ -550,7 +610,7 @@ export function transformsFor(sym, rec, w, h, anchor) {
 }
 
 // ---- crop to cell -----------------------------------------------------------------------------
-export const CROP_MODES = new Set(['mirror', 'rotate', 'kaleido', 'wallpaper', 'hyperbolic']);
+export const CROP_MODES = new Set(['mirror', 'rotate', 'kaleido', 'frieze', 'wallpaper', 'hyperbolic']);
 export const CROP_SITES = 16;
 
 /**
@@ -606,7 +666,7 @@ export function cropDomain(sym, pts, w, h, anchor = null) {
     const mid = ang + (k + 0.5) * wedge;
     c = { x: ox + r * Math.cos(mid), y: oy - r * Math.sin(mid) };
   }
-  if (sym.mode === 'wallpaper') {
+  if (sym.mode === 'wallpaper' || sym.mode === 'frieze') {
     // Guide-aligned asymmetric unit. In lattice coordinates (u along a, v along b) the canonical
     // cell D0 holds, of every orbit, the one point in [0,1)² whose images under the group's point
     // operations (mod the lattice) have the smallest v, then the smallest u. Its walls are lattice
@@ -614,17 +674,27 @@ export function cropDomain(sym, pts, w, h, anchor = null) {
     // pm the half on one side of the mirror, p4 a quarter triangle, and so on. Each orbit has exactly
     // one such point, so its images tile with no overlap and no gap. The stroke's own cell is the
     // image of D0 that holds the start point: a pixel is kept when h⁻¹ of it lies in D0.
-    const { a, b } = latticeBasis(sym);
+    let a, b, ops, oxL = ox, oyL = oy;
+    if (sym.mode === 'frieze') {
+      // the same machinery with a pseudo-lattice: first axis across the strip (one huge cell, the
+      // strip centre at its middle), second axis along it. "Smallest along, then smallest across"
+      // puts the cuts on the repeat lines, mirrors and half-turn centres of the strip.
+      ({ a, b } = friezeLattice(sym));
+      oxL = ox - a[0] / 2; oyL = oy - a[1] / 2;
+      ops = (FRIEZE[sym.fr] || FRIEZE.p1).ops.map(([su, sv, tu]) => [sv, 0, 0, su, sv < 0 ? 1 : 0, tu]);
+    } else {
+      ({ a, b } = latticeBasis(sym));
+      const g = WALLPAPER[sym.wp] || WALLPAPER.p1;
+      const cents = g.centred ? [[0, 0], [0.5, 0.5]] : [[0, 0]];
+      ops = [];
+      for (const ct of cents) for (const o of g.ops) ops.push([o[0], o[1], o[2], o[3], o[4] + ct[0], o[5] + ct[1]]);
+    }
     const det = a[0] * b[1] - a[1] * b[0];
     const Bi = [b[1] / det, -a[1] / det, -b[0] / det, a[0] / det];
-    const g = WALLPAPER[sym.wp] || WALLPAPER.p1;
-    const cents = g.centred ? [[0, 0], [0.5, 0.5]] : [[0, 0]];
-    const ops = [];
-    for (const ct of cents) for (const o of g.ops) ops.push([o[0], o[1], o[2], o[3], o[4] + ct[0], o[5] + ct[1]]);
     const apply = (o, f) => [o[0] * f[0] + o[1] * f[1] + o[4], o[2] * f[0] + o[3] * f[1] + o[5]];
     const red = (f) => [f[0] - Math.floor(f[0]), f[1] - Math.floor(f[1])];
     const less = (p, q) => p[1] < q[1] - 1e-9 || (Math.abs(p[1] - q[1]) <= 1e-9 && p[0] < q[0] - 1e-9);
-    const dx = c.x - ox, dy = c.y - oy;
+    const dx = c.x - oxL, dy = c.y - oyL;
     const fc = [Bi[0] * dx + Bi[2] * dy, Bi[1] * dx + Bi[3] * dy];
     // h⁻¹ = (lattice shift) ∘ op, chosen so that h⁻¹(c) is c's canonical representative
     let best = null;
@@ -640,7 +710,7 @@ export function cropDomain(sym, pts, w, h, anchor = null) {
       sites[i * 3 + 1] = o[4]; sites[i * 3 + 2] = o[5];
     });
     const h = best.h;
-    return { mode: 3, c: [c.x, c.y], w0: 1, sites, n: Math.min(CROP_SITES, ops.length), origin: [ox, oy],
+    return { mode: 3, c: [c.x, c.y], w0: 1, sites, n: Math.min(CROP_SITES, ops.length), origin: [oxL, oyL],
       basis: [a[0], a[1], b[0], b[1]], inv: Bi, h0: [h[0], h[1], h[4]], h1: [h[2], h[3], h[5]] };
   }
   const w0 = wt(c.x, c.y);

@@ -13,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.9.0';
+export const VERSION = '2.10.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -357,7 +357,7 @@ function updateInfo() {
   else {
     recEl.textContent = `${xs.length.toLocaleString()} copies per stroke across ${xs.levels + 1} level${xs.levels ? 's' : ''}.`;
     if (xs.capped) {
-      const tip = sym.mode === 'wallpaper' ? 'larger cells, a smaller group or less depth'
+      const tip = sym.mode === 'wallpaper' || sym.mode === 'frieze' ? 'larger cells, a smaller group or less depth'
         : sym.mode === 'hyperbolic' ? 'a lower tiling depth or less recursion depth' : 'less depth';
       recEl.textContent += ` Level ${xs.levels + 1} would need ${xs.needed.toLocaleString()} copies (limit ${copyLimit().toLocaleString()}) — try ${tip}.`;
     }
@@ -370,6 +370,7 @@ function updateInfo() {
       ? `{${p},${q}}: ${p}-gons, ${q} meeting at each vertex · ${t}. Draw inside the disk.`
       : `{${p},${q}} isn't hyperbolic (needs 1/p + 1/q < 1/2) — using a larger q. ${t}.`;
   } else if (sym.mode === 'wallpaper') t = `Group ${sym.wp} · ${t} (copies cover the artboard).`;
+  else if (sym.mode === 'frieze') t = `Frieze ${sym.fr} · ${t} (copies run the length of the strip).`;
   else if (sym.mode === 'inversion') t = `Reflections through ${Math.round(sym.invK)} circle(s)${+sym.invHub > 0 ? ' + hub' : ''} · ${t}.`;
   else t += '.';
   $('#symInfo').textContent = t;

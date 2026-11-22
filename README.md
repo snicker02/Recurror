@@ -62,6 +62,8 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 
 **Crop to cell** (mirror, rotational, kaleidoscope, wallpaper and hyperbolic): each copy is cut at the symmetry boundaries, so copies never overlap. For wallpaper groups the cell is a guide-aligned asymmetric unit: of each orbit it keeps the one point, inside a lattice cell, whose images have the lowest position across the cell (then the leftmost). So p1 crops to the whole guide cell, p2 to half of it (cut through the half-cell rotation centres), pm and pmm along the mirrors, p4 to a quarter triangle between the diagonals, and so on. The stroke uses the copy of that unit it starts in (judged a little way along the stroke, so a stroke begun on a wall or centre joins the cell it heads into). For the other modes the cell is the Dirichlet domain of the point where the stroke starts, the points nearer to it than to any of its images, using hyperbolic distance in {p,q} mode. For a group of isometries those cells tile the plane or disk exactly, and their walls fall on the mirror lines; for plain rotations the cell is turned so the cuts fall on the guide rays. The cut happens per pixel in the shaders, against the 16 nearest images, so it works with recursion, warps, fills, the preview while drawing and the paint bucket. Spiral and circle inversion copies aren't isometries, so they don't offer it.
 
+**Frieze** (strip patterns): the 7 frieze groups, for borders and braids. p1 hop (translation), p11g step (glide), p1m1 sidle (mirrors across the strip), p11m jump (mirror along it), p2 spinning hop (half turns), p2mg spinning sidle and p2mm spinning jump. Set the **Repeat** length and the **Strip angle**; the guides show the centre line, the repeat lines, the mirrors and the half-turn centres. Crop to cell, recursion, the bucket and snapping all work with it.
+
 ## Recursion (per stroke)
 
 - **Nest**: Mᴸ ∘ G, so the whole figure repeats inside itself.
@@ -110,6 +112,10 @@ New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour
 - **End shading** with **Shade length** (in stroke widths) and **Shade ends** (both, start or end): graphite that darkens toward the ends of the line, as if it tucks under its neighbour. The shading reaches further along the edges than down the middle, so it curves like hand shading.
 - **Edge shading** with **Edge side** (left, both or right), **Grain** (pencil texture) and **Shade colour**.
 - Presets: Tangle strand, Tangle tube, Inked colour band. Draw a pattern such as Y-Braid piece by piece; each piece's ends get the tuck shading.
+
+## Pattern fills
+
+Five fill patterns of Recurror's own design, in both the Fill panel and the bucket: **Plaitwork** (ribbons woven over and under, shaded where they dive), **Pebbles** (packed stones lit from the top left), **Scallops** (rows of shell scales tucked under the row above), **Orb rings** (a hex grid of ringed orbs) and **Chevron folds** (a ribbon folded back and forth). Colour A is the paper, Colour B the ink and shading; Angle, Scale and Weight (line weight) apply.
 
 ## Paint bucket (K)
 
@@ -199,6 +205,8 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.10.0**: Frieze symmetry (all 7 strip groups, with crop to cell) and five original pattern fills: Plaitwork, Pebbles, Scallops, Orb rings, Chevron folds.
 
 - **2.9.0**: Bucket fill styles: gradients (linear, radial, dome) and textures (noise, hatch, cross-hatch, dots, cells, marble) with all their settings, plus **Use Fill panel settings**. Clicking an existing bucket fill restyles it.
 
