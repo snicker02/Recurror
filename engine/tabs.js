@@ -37,7 +37,7 @@ export function initPanelTabs(panel) {
   });
 
   let cur = 0;
-  try { const v = +localStorage.getItem(KEY); if (v >= 0 && v < tabs.length) cur = v; } catch { /* storage unavailable */ }
+  try { const v = +localStorage.getItem(KEY); if (v >= 0 && v < tabs.length && !tabs[v].d.hidden) cur = v; } catch { /* storage unavailable */ }
 
   function select(i, scroll = true) {
     cur = i;
@@ -53,9 +53,22 @@ export function initPanelTabs(panel) {
     try { localStorage.setItem(KEY, String(i)); } catch { /* storage unavailable */ }
   }
 
+  // a section hidden by the current mode (e.g. Bucket outside the bucket tool) hides its tab too
+  function syncHidden() {
+    tabs.forEach((t) => { t.b.hidden = t.d.hidden; });
+    if (tabs[cur].d.hidden) {
+      const i = tabs.findIndex((t) => !t.d.hidden);
+      if (i >= 0) select(i, false);
+    }
+  }
+  new MutationObserver(syncHidden).observe(panel, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+
   const apply = () => document.body.classList.toggle('tabbed', mq.matches);
   if (mq.addEventListener) mq.addEventListener('change', apply); else mq.addListener(apply);
   select(cur, false);
+  syncHidden();
   apply();
-  return { select };
+  /** Open the tab of a given <details> section. */
+  const show = (d) => { const i = tabs.findIndex((t) => t.d === d); if (i >= 0 && !d.hidden) select(i); };
+  return { select, show };
 }

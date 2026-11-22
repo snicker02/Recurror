@@ -116,6 +116,11 @@ uniform vec2 u_stitch;      // (spacing, slant)
 uniform float u_seed;       // per-stroke noise seed
 uniform float u_baseHw;     // nominal half width (local): noise scales don't explode where the stroke tapers
 uniform float u_softZ;      // 1 = translucent wash: interiors judged by geometric coverage
+uniform vec4 u_shade;       // graphite shading: (end amount, end length (local), edge amount, grain)
+uniform vec3 u_shade2;      // (shade start, shade end, side bias −1…1)
+uniform vec3 u_shadeCol;
+uniform float u_ink;        // ink outline width (local units, 0 = off)
+uniform vec3 u_inkCol;
 
 varying vec2 v_dc;
 varying float v_hw;
@@ -314,6 +319,34 @@ void main() {
     vec3 nn = normalize(vec3(lat * 0.6, 1.0));
     col = shade(base, nn);
   }
+  // Zentangle-style graphite shading, on top of any mode: darkest where the line ends (it tucks
+  // under its neighbour), reaching further along the edges than down the middle, plus edge shading
+  float ax = clamp(abs(v_dc.x) / hw, 0.0, 1.0);
+  if (u_shade.x > 0.0 || u_shade.z > 0.0) {
+    float kEnd = 0.0;
+    if (u_shade.x > 0.0 && u_loop < 0.5) {
+      float d = 1e9;
+      if (u_shade2.x > 0.5) d = min(d, sC);
+      if (u_shade2.y > 0.5) d = min(d, u_chain.z - sC);
+      float L = max(u_shade.y, 1e-3);
+      kEnd = u_shade.x * (1.0 - smoothstep(0.0, L, d - 0.6 * L * ax * ax));
+    }
+    float side = v_dc.x >= 0.0 ? 1.0 : -1.0;
+    float kEdge = u_shade.z * smoothstep(0.25, 1.0, ax) * clamp(1.0 + u_shade2.z * side, 0.0, 1.0);
+    float k = 1.0 - (1.0 - kEnd) * (1.0 - kEdge);
+    if (u_shade.w > 0.0) {
+      vec2 gp = vec2(sC, v_dc.x) * (2.5 / max(u_baseHw, 0.25)) + u_seed;
+      float g = 0.65 * vnoise2(gp) + 0.35 * vnoise2(gp * 3.1 + 7.0);
+      k *= mix(1.0, 0.45 + 1.1 * g, u_shade.w);
+    }
+    col = mix(col, u_shadeCol, clamp(k, 0.0, 1.0));
+  }
+  // ink outline: a pen line along both edges and round the caps (not across a blended join)
+  if (u_ink > 0.0) {
+    float rr = linked > 0.5 ? abs(v_dc.x) : r;
+    col = mix(col, u_inkCol, clamp((rr - (hw - u_ink)) / aa + 0.5, 0.0, 1.0));
+  }
+
   a *= dashCov;
   geo *= dashCov;
 

@@ -21,6 +21,9 @@ export function defaultStyle() {
     dash: 'none', dashLen: 30, dashGap: 18,
     // mode-specific
     strands: 3, rough: 0.5, outline: 0.3, stitchSpacing: 14, stitchSlant: 0.6,
+    // graphite shading + ink outline (any mode)
+    shadeEnds: 0, shadeLen: 1.5, shadeWhich: 'both', shadeEdge: 0, shadeSide: 0, shadeGrain: 0.35, shadeCol: '#262626',
+    ink: 0, inkCol: '#000000',
   };
 }
 export function defaultFill() {
@@ -93,6 +96,7 @@ export function normaliseDoc(raw) {
       sym: migrateSym(s.sym, w, h),
       rec: Object.assign(defaultRec(), s.rec || {}),
       warp: Object.assign(defaultWarp(), s.warp || {}),
+      ...(s.bucket ? { bucket: true } : {}),
     });
   }
   const seen = new Set();
