@@ -520,6 +520,35 @@ export function allTransformsCached(sym, rec, w, h) {
   return v;
 }
 
+/**
+ * Copies for one stroke. The wallpaper list covers the artboard for a motif near the lattice origin;
+ * a stroke drawn n cells away would leave the far side of the artboard empty. Since the lattice
+ * translation T_n is in the group, g∘T_−n runs over the same group, and maps the stroke (= T_n of a
+ * motif near the origin) exactly where g maps that motif. So the list is shifted by the stroke's
+ * cell. (With recursion the motif maps don't commute with T_n, so the list is used as it is.)
+ * @param anchor {x, y} centre of the stroke's bound
+ */
+const shiftCache = new Map();
+export function transformsFor(sym, rec, w, h, anchor) {
+  const xs = allTransformsCached(sym, rec, w, h);
+  if (!sym || sym.mode !== 'wallpaper' || (rec && rec.mode !== 'off') || !anchor) return xs;
+  const { a, b } = latticeBasis(sym);
+  const det = a[0] * b[1] - a[1] * b[0];
+  const dx = anchor.x - +sym.cx, dy = anchor.y - +sym.cy;
+  const ni = Math.round((b[1] * dx - b[0] * dy) / det), nj = Math.round((-a[1] * dx + a[0] * dy) / det);
+  if (!ni && !nj) return xs;
+  const k = xs.key + '@' + ni + ',' + nj;
+  let v = shiftCache.get(k);
+  if (!v) {
+    const T = { a: C(1), b: C(-(a[0] * ni + b[0] * nj), -(a[1] * ni + b[1] * nj)), c: C(0), d: C(1), conj: false };
+    v = xs.map((t) => entry(mobCompose(t.mob, T), t.level));
+    v.levels = xs.levels; v.capped = xs.capped; v.needed = xs.needed; v.key = k;
+    if (shiftCache.size > 256) shiftCache.clear();
+    shiftCache.set(k, v);
+  }
+  return v;
+}
+
 // ---- crop to cell -----------------------------------------------------------------------------
 export const CROP_MODES = new Set(['mirror', 'rotate', 'kaleido', 'wallpaper', 'hyperbolic']);
 export const CROP_SITES = 16;
@@ -622,4 +651,33 @@ export function cropDomain(sym, pts, w, h) {
   const sites = new Float32Array(CROP_SITES * 3);
   imgs.forEach((q, i) => { sites[i * 3] = q.x; sites[i * 3 + 1] = q.y; sites[i * 3 + 2] = q.w; });
   return { mode: 1, c: [c.x, c.y], w0, sites, n: imgs.length };
+}
+
+/** CPU twin of the shaders' cropped(): does the local point (x, y) lie in the crop cell D? */
+export function cropKeeps(D, x, y) {
+  if (!D) return true;
+  if (D.mode === 3) {
+    const E = 1e-5, B = D.inv;
+    const ux = x - D.origin[0], uy = y - D.origin[1];
+    const f0 = [B[0] * ux + B[2] * uy, B[1] * ux + B[3] * uy];
+    const f = [D.h0[0] * f0[0] + D.h0[1] * f0[1] + D.h0[2], D.h1[0] * f0[0] + D.h1[1] * f0[1] + D.h1[2]];
+    if (f[0] < -E || f[1] < -E || f[0] >= 1 + E || f[1] >= 1 + E) return false;
+    for (let j = 0; j < D.n; j++) {
+      let k = D.sites[j * 3];
+      const m11 = (k % 3) - 1; k = Math.floor(k / 3 + 0.01);
+      const m10 = (k % 3) - 1; k = Math.floor(k / 3 + 0.01);
+      const m01 = (k % 3) - 1; k = Math.floor(k / 3 + 0.01);
+      const m00 = k - 1;
+      let gx = m00 * f[0] + m01 * f[1] + D.sites[j * 3 + 1], gy = m10 * f[0] + m11 * f[1] + D.sites[j * 3 + 2];
+      gx -= Math.floor(gx + E); gy -= Math.floor(gy + E);
+      if (gy < f[1] - E || (Math.abs(gy - f[1]) <= E && gx < f[0] - E)) return false;
+    }
+    return true;
+  }
+  const d0 = ((x - D.c[0]) ** 2 + (y - D.c[1]) ** 2) * D.w0;
+  for (let j = 0; j < D.n; j++) {
+    const ex = x - D.sites[j * 3], ey = y - D.sites[j * 3 + 1];
+    if ((ex * ex + ey * ey) * D.sites[j * 3 + 2] < d0) return false;
+  }
+  return true;
 }
