@@ -62,13 +62,14 @@
         <select data-bind="bfill.mode">
           <optgroup label="Colour"><option value="flat">Flat</option><option value="linear">Linear gradient</option><option value="radial">Radial gradient</option><option value="dome">Dome (lit)</option></optgroup>
           <optgroup label="Texture"><option value="noise">Noise</option><option value="hatch">Hatch</option><option value="cross">Cross-hatch</option><option value="dots">Dots</option><option value="cells">Cells</option><option value="marble">Marble</option></optgroup>
+          <optgroup label="Pattern"><option value="plait">Plaitwork</option><option value="pebbles">Pebbles</option><option value="scallops">Scallops</option><option value="orbs">Orb rings</option><option value="chevron">Chevron folds</option></optgroup>
         </select></div>
       <div class="row"><label>Colour A</label><input type="color" data-bind="bfill.colA"></div>
-      <div class="row" data-show="bfill.mode=linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Colour B</label><input type="color" data-bind="bfill.colB"></div>
-      <div class="row" data-show="bfill.mode=linear|noise|hatch|cross|dots|cells|marble"><label>Angle</label><input type="range" min="0" max="360" step="1" data-bind="bfill.angle"><output></output></div>
-      <div class="row" data-show="bfill.mode=noise|hatch|cross|dots|cells|marble"><label>Scale</label><input type="range" min="2" max="400" step="0.5" data-bind="bfill.scale"><output></output></div>
-      <div class="row" data-show="bfill.mode=noise|hatch|cross|dots|cells|marble"><label title="Line weight, dot size, contrast or turbulence">Weight</label><input type="range" min="0" max="1" step="0.01" data-bind="bfill.thick"><output></output></div>
-      <div class="row" data-show="bfill.mode=flat|linear|radial|noise|hatch|cross|dots|cells|marble"><label>Lit (dome)</label><input type="checkbox" data-bind="bfill.lit"></div>
+      <div class="row" data-show="bfill.mode=linear|radial|dome|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Colour B</label><input type="color" data-bind="bfill.colB"></div>
+      <div class="row" data-show="bfill.mode=linear|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Angle</label><input type="range" min="0" max="360" step="1" data-bind="bfill.angle"><output></output></div>
+      <div class="row" data-show="bfill.mode=noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Scale</label><input type="range" min="2" max="400" step="0.5" data-bind="bfill.scale"><output></output></div>
+      <div class="row" data-show="bfill.mode=noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label title="Line weight, dot size, contrast or turbulence">Weight</label><input type="range" min="0" max="1" step="0.01" data-bind="bfill.thick"><output></output></div>
+      <div class="row" data-show="bfill.mode=flat|linear|radial|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Lit (dome)</label><input type="checkbox" data-bind="bfill.lit"></div>
       <div class="row"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="bfill.opacity"><output></output></div>
       <div class="btns"><button data-act="bucketFromFill" title="Copy the Fill panel's settings into the bucket">Use Fill panel settings</button></div>
       <div class="row"><label title="How different a colour may be and still count as the same area (0–255)">Tolerance</label><input type="range" min="0" max="200" step="1" data-bind="ui.bucketTol"><output></output></div>
@@ -110,16 +111,29 @@
           <option value="rotate">Rotational</option>
           <option value="kaleido">Kaleidoscope</option>
           <option value="spiral">Spiral</option>
+          <option value="frieze">Frieze (7 strip groups)</option>
           <option value="wallpaper">Wallpaper (17 groups)</option>
           <option value="hyperbolic">Hyperbolic {p,q}</option>
           <option value="inversion">Circle inversion</option>
         </select></div>
       <div class="row" data-show="sym.mode=rotate|kaleido|spiral"><label>Folds</label><input type="range" min="2" max="48" step="1" data-bind="sym.n"><output></output></div>
-      <div class="row" data-show="sym.mode=mirror|rotate|kaleido|wallpaper|hyperbolic"><label title="Cut each copy at the symmetry boundaries, so copies never overlap. The stroke keeps the part inside the cell where it starts.">Crop to cell</label><input type="checkbox" data-bind="sym.crop"></div>
+      <div class="row" data-show="sym.mode=mirror|rotate|kaleido|frieze|wallpaper|hyperbolic"><label title="Cut each copy at the symmetry boundaries, so copies never overlap. The stroke keeps the part inside the cell where it starts.">Crop to cell</label><input type="checkbox" data-bind="sym.crop"></div>
       <div class="row" data-show="sym.mode=mirror|rotate|kaleido|spiral|hyperbolic|inversion"><label>Angle</label><input type="range" min="0" max="360" step="0.5" data-bind="sym.angle"><output></output></div>
       <div class="row" data-show="sym.mode=spiral"><label>Ratio</label><input type="range" min="0.5" max="1.15" step="0.005" data-bind="sym.ratio"><output></output></div>
       <div class="row" data-show="sym.mode=spiral"><label>Steps</label><input type="range" min="2" max="300" step="1" data-bind="sym.steps"><output></output></div>
 
+      <div class="row" data-show="sym.mode=frieze"><label>Group</label>
+        <select data-bind="sym.fr">
+          <option value="p1">p1 · hop (translation)</option>
+          <option value="p11g">p11g · step (glide)</option>
+          <option value="p1m1">p1m1 · sidle (mirrors across)</option>
+          <option value="p11m">p11m · jump (mirror along)</option>
+          <option value="p2">p2 · spinning hop (half turns)</option>
+          <option value="p2mg">p2mg · spinning sidle</option>
+          <option value="p2mm">p2mm · spinning jump</option>
+        </select></div>
+      <div class="row" data-show="sym.mode=frieze"><label>Repeat</label><input type="range" min="24" max="1024" step="1" data-bind="sym.frLen"><output></output></div>
+      <div class="row" data-show="sym.mode=frieze"><label title="Direction of the strip (0 = left to right)">Strip angle</label><input type="range" min="0" max="180" step="0.5" data-bind="sym.frAngle"><output></output></div>
       <div class="row" data-show="sym.mode=wallpaper"><label>Group</label>
         <select data-bind="sym.wp">
           <optgroup label="Oblique"><option value="p1">p1 · translations</option><option value="p2">p2 · 2-fold</option></optgroup>
@@ -291,14 +305,15 @@
           <option value="none">None</option>
           <optgroup label="Colour"><option value="flat">Flat</option><option value="linear">Linear gradient</option><option value="radial">Radial gradient</option><option value="dome">Dome (lit)</option></optgroup>
           <optgroup label="Texture"><option value="noise">Noise</option><option value="hatch">Hatch</option><option value="cross">Cross-hatch</option><option value="dots">Dots</option><option value="cells">Cells</option><option value="marble">Marble</option></optgroup>
+          <optgroup label="Pattern"><option value="plait">Plaitwork</option><option value="pebbles">Pebbles</option><option value="scallops">Scallops</option><option value="orbs">Orb rings</option><option value="chevron">Chevron folds</option></optgroup>
         </select></div>
-      <div class="row" data-show="fill.mode=flat|linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Colour A</label><input type="color" data-bind="fill.colA"></div>
-      <div class="row" data-show="fill.mode=linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Colour B</label><input type="color" data-bind="fill.colB"></div>
-      <div class="row" data-show="fill.mode=linear|noise|hatch|cross|dots|cells|marble"><label>Angle</label><input type="range" min="0" max="360" step="1" data-bind="fill.angle"><output></output></div>
-      <div class="row" data-show="fill.mode=noise|hatch|cross|dots|cells|marble"><label>Scale</label><input type="range" min="2" max="400" step="0.5" data-bind="fill.scale"><output></output></div>
-      <div class="row" data-show="fill.mode=noise|hatch|cross|dots|cells|marble"><label title="Line weight, dot size, contrast or turbulence">Weight</label><input type="range" min="0" max="1" step="0.01" data-bind="fill.thick"><output></output></div>
-      <div class="row" data-show="fill.mode=flat|linear|radial|noise|hatch|cross|dots|cells|marble"><label>Lit (dome)</label><input type="checkbox" data-bind="fill.lit"></div>
-      <div class="row" data-show="fill.mode=flat|linear|radial|dome|noise|hatch|cross|dots|cells|marble"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="fill.opacity"><output></output></div>
+      <div class="row" data-show="fill.mode=flat|linear|radial|dome|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Colour A</label><input type="color" data-bind="fill.colA"></div>
+      <div class="row" data-show="fill.mode=linear|radial|dome|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Colour B</label><input type="color" data-bind="fill.colB"></div>
+      <div class="row" data-show="fill.mode=linear|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Angle</label><input type="range" min="0" max="360" step="1" data-bind="fill.angle"><output></output></div>
+      <div class="row" data-show="fill.mode=noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Scale</label><input type="range" min="2" max="400" step="0.5" data-bind="fill.scale"><output></output></div>
+      <div class="row" data-show="fill.mode=noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label title="Line weight, dot size, contrast or turbulence">Weight</label><input type="range" min="0" max="1" step="0.01" data-bind="fill.thick"><output></output></div>
+      <div class="row" data-show="fill.mode=flat|linear|radial|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Lit (dome)</label><input type="checkbox" data-bind="fill.lit"></div>
+      <div class="row" data-show="fill.mode=flat|linear|radial|dome|noise|hatch|cross|dots|cells|marble|plait|pebbles|scallops|orbs|chevron"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="fill.opacity"><output></output></div>
     </details>
 
     <details open>

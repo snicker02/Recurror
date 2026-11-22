@@ -21,6 +21,8 @@ export const GRAD_MODES = { none: 0, along: 1, across: 2, center: 3, bands: 4 };
 export const FILL_MODES = {
   none: 0, flat: 1, linear: 2, radial: 3, dome: 4,
   noise: 5, hatch: 6, cross: 7, dots: 8, cells: 9, marble: 10,
+  // pattern fills (Recurror's own designs): ink in colour B, shaded like pencil work
+  plait: 11, pebbles: 12, scallops: 13, orbs: 14, chevron: 15,
 };
 export const BLEND_MODES = { normal: 0, multiply: 1, screen: 2, overlay: 3, darken: 4, lighten: 5, add: 6, difference: 7 };
 
@@ -513,6 +515,106 @@ float lineInk(float y, float px) {           // y in repeat units, px = repeat u
   return clamp((u_fthick * 0.5 - d) / max(px, 1e-4) + 0.5, 0.0, 1.0);
 }
 
+// ---- pattern fills ---------------------------------------------------------------------------
+// q in repeat units, px = repeat units per pixel. Each returns the colour; A = paper/body, B = ink.
+float inkLine(float dist, float px) {           // anti-aliased pen line centred on dist = 0
+  float lw = 0.012 + 0.05 * u_fthick;
+  return clamp((lw - abs(dist)) / max(px, 1e-4) + 0.5, 0.0, 1.0);
+}
+vec3 graphite(vec3 c, float k, vec2 q) {        // pencil shading toward colour B, with a little grain
+  float g = 0.75 + 0.5 * vnoise(q * 23.0);
+  return mix(c, u_colB, clamp(k * g, 0.0, 1.0) * 0.85);
+}
+// Plaitwork: two families of ribbons, alternately over and under; each ribbon darkens where it dives.
+vec3 patPlait(vec2 q, float px) {
+  float bw = 0.30;
+  float hy = abs(fract(q.y) - 0.5), vx = abs(fract(q.x) - 0.5);
+  bool inH = hy < bw, inV = vx < bw;
+  float par = mod(floor(q.x) + floor(q.y), 2.0);
+  if (!inH && !inV) return mix(u_colB, u_colA, 0.08);
+  bool hTop = inH && (!inV || par < 0.5);
+  float across = hTop ? hy : vx;                       // distance from the ribbon's centre line
+  float along = hTop ? q.x : q.y;                       // position along it
+  float row = hTop ? floor(q.y) : floor(q.x);
+  // nearest crossing where this ribbon goes under: parity of (crossing column + row) = 1 for H
+  float k0 = floor(along);
+  float dUnder = 9.0;
+  for (int i = -1; i <= 1; i++) {
+    float k = k0 + float(i);
+    float under = mod(k + row, 2.0);
+    if ((hTop && under > 0.5) || (!hTop && under < 0.5)) dUnder = min(dUnder, abs(along - (k + 0.5)) - bw);
+  }
+  vec3 c = graphite(u_colA, 1.0 - smoothstep(0.0, 0.45, dUnder - 0.35 * (across / bw) * (across / bw) * 0.3), q);
+  c = graphite(c, smoothstep(0.55, 1.0, across / bw) * 0.35, q);
+  float edge = inkLine(across - bw, px);
+  float tuck = dUnder < 0.02 ? 1.0 : inkLine(dUnder, px);
+  return mix(c, u_colB, max(edge, tuck));
+}
+// Pebbles: rounded stones packed in a Voronoi layout, each lit from the top left.
+vec3 patPebbles(vec2 q, float px) {
+  vec2 i = floor(q), f = fract(q);
+  float F1 = 8.0, F2 = 8.0; vec2 c1 = vec2(0.0);
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 o = vec2(float(x), float(y));
+    vec2 site = o + 0.15 + hash2(i + o) * 0.7;
+    float dd = length(site - f);
+    if (dd < F1) { F2 = F1; F1 = dd; c1 = site - f; } else if (dd < F2) F2 = dd;
+  }
+  float gap = (F2 - F1) * 0.5;                           // distance to the cell wall
+  float rim = 0.025 + 0.035 * u_fthick;
+  if (gap < rim) return mix(u_colB, u_colA, 0.06);
+  float inner = clamp((gap - rim) / 0.3, 0.0, 1.0);
+  vec2 L = normalize(vec2(-0.6, -0.8));
+  float lit = dot(normalize(-c1 + 1e-4), L);            // which side of the stone faces the light
+  vec3 c = graphite(u_colA, (1.0 - inner) * 0.8 * (0.6 - 0.4 * lit), q);
+  c = mix(c, vec3(1.0), smoothstep(0.75, 1.0, inner) * 0.25 * max(lit, 0.0));
+  return mix(c, u_colB, inkLine(gap - rim, px));
+}
+// Scallops: rows of shell scales; each row tucks under the row above, shaded where it disappears.
+vec3 patScallops(vec2 q, float px) {
+  float R = 0.62;
+  float j0 = floor(q.y / 0.5);
+  for (int dj = -2; dj <= 0; dj++) {                    // the upper row (smaller j) lies on top
+    float j = j0 + float(dj);
+    float off = mod(j, 2.0) * 0.5;
+    for (int di = -1; di <= 1; di++) {
+      float ci = floor(q.x - off) + float(di) + 0.5 + off;
+      vec2 d = q - vec2(ci, j * 0.5);
+      float r = length(d);
+      if (r < R && d.y >= 0.0) {
+        vec3 c = graphite(u_colA, (1.0 - smoothstep(0.0, 0.3, d.y)) * 0.75, q);
+        float ink = max(inkLine(r - R, px), max(inkLine(r - R * 0.7, px) * 0.7, inkLine(r - R * 0.42, px) * 0.5));
+        return mix(c, u_colB, ink);
+      }
+    }
+  }
+  return mix(u_colB, u_colA, 0.08);
+}
+// Orb rings: a hex grid of orbs with concentric rings and a crescent of shading.
+vec3 patOrbs(vec2 q, float px) {
+  vec2 s = vec2(1.0, 1.7320508);
+  vec2 a = mod(q, s) - s * 0.5, b = mod(q + s * 0.5, s) - s * 0.5;
+  vec2 d = dot(a, a) < dot(b, b) ? a : b;
+  float r = length(d);
+  float R = 0.46;
+  if (r > R) return mix(u_colB, u_colA, 0.08);
+  vec3 c = graphite(u_colA, smoothstep(0.0, R, length(d - vec2(-0.12, -0.14))) * 0.7, q);
+  float rings = 0.0;
+  for (int k = 1; k <= 3; k++) rings = max(rings, inkLine(r - R * float(k) / 3.6, px) * (1.0 - 0.2 * float(k)));
+  return mix(c, u_colB, max(inkLine(r - R, px), rings));
+}
+// Chevron folds: a zigzag ribbon folded back and forth, alternate panels in shadow.
+vec3 patChevron(vec2 q, float px) {
+  float z = abs(fract(q.x) - 0.5) * 2.0;                // 0 at the folds' centre line, 1 at the creases
+  float y = q.y + z * 0.5;
+  float band = floor(y), fy = fract(y);
+  float side = step(0.5, fract(q.x));                    // left or right face of the fold
+  vec3 c = graphite(u_colA, (side > 0.5 ? 0.45 : 0.0) + 0.35 * (1.0 - smoothstep(0.0, 0.5, fy)) * side, q);
+  if (mod(band, 2.0) > 0.5) c = mix(c, u_colB, 0.08);
+  float crease = inkLine((fract(q.x) - 0.5) * 0.6, px) * 0.6;
+  return mix(c, u_colB, max(inkLine(fy, px), max(inkLine(fy - 1.0, px), crease)));
+}
+
 void main() {
   if (cropped(v_local)) discard;
   int mode = int(u_fmode + 0.5);
@@ -555,7 +657,11 @@ void main() {
   } else if (mode == 10) {
     float t = 0.5 + 0.5 * sin((q.x + fbm(q * 1.5) * (1.5 + 6.0 * u_fthick)) * 3.14159);
     col = mix(u_colA, u_colB, t);
-  }
+  } else if (mode == 11) col = patPlait(q, px);
+  else if (mode == 12) col = patPebbles(q, px);
+  else if (mode == 13) col = patScallops(q, px);
+  else if (mode == 14) col = patOrbs(q, px);
+  else if (mode == 15) col = patChevron(q, px);
   if (mode == 4 || u_flit > 0.5) {
     vec2 rq = d / max(u_radius, 1e-3);
     float rr = min(dot(rq, rq), 1.0);
