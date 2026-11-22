@@ -113,12 +113,14 @@ New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour
 
 ## Paint bucket (K)
 
+The bucket has its own fill style: **Flat**, **Linear** or **Radial gradient**, **Dome**, or a texture (**Noise**, **Hatch**, **Cross-hatch**, **Dots**, **Cells**, **Marble**), with Colour A/B, Angle, Scale, Weight, Lit and Opacity, the same as the Fill panel. **Use Fill panel settings** copies the Fill panel's style into the bucket. Gradients span each filled area.
+
 Click a closed area to fill it. The drawing is rendered, flood-filled by colour (**Tolerance**), traced and stored as an ordinary vector fill: a closed polyline whose holes are joined by zero-width bridges, so even-odd filling keeps islands as holes.
 - **Gap close** stops the fill leaking through breaks up to about twice that wide.
 - Fills of empty areas go to the bottom of the active layer, under its lines, and spread a pixel or two under them so no hairline shows. Turn off **Under the lines** to put them on top.
 - **Symmetric copies** gives the fill the current symmetry, so one click fills every matching area.
 - **Crop to cell** (off by default) makes the symmetry's cell walls act as borders too: the fill keeps only the part of the area inside the cell you clicked, and its copies fill the matching parts of the other cells. Works with mirror, rotational, kaleidoscope, wallpaper and hyperbolic symmetry. With it off, the traced area is used whole. With a warp on, the fill also takes the warp, so the copies follow the warped lines.
-- Click on a line itself to recolour the line (its shading and ink stay). Click an existing fill to recolour it.
+- Click on a line itself to recolour the line with Colour A (and Colour B for gradient or texture styles); its shading and ink stay. Click an existing fill to restyle it with the current bucket style.
 
 ## Layers
 
@@ -197,6 +199,8 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.9.0**: Bucket fill styles: gradients (linear, radial, dome) and textures (noise, hatch, cross-hatch, dots, cells, marble) with all their settings, plus **Use Fill panel settings**. Clicking an existing bucket fill restyles it.
 
 - **2.8.5**: Bucket option **Crop to cell**: the fill stops at the walls of the clicked symmetry cell, and its copies fill the matching parts of the other cells.
 

@@ -13,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.8.5';
+export const VERSION = '2.9.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -43,7 +43,10 @@ const tpl = {
   shape: defaultShape(), style: defaultStyle(), fill: defaultFill(),
   sym: defaultSym(doc.width, doc.height), rec: defaultRec(), warp: defaultWarp(),
 };
-const ui = { bucketCrop: false, bucketCol: '#000000', bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
+const ui = { bucketCrop: false, bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
+// the bucket's own fill style (Bucket panel, bound as bfill.*); ui.bucketCol stays as a shorthand for colour A
+ui.bucketFill = { mode: 'flat', colA: '#000000', colB: '#7dd3fc', angle: 90, scale: 24, thick: 0.4, lit: false, opacity: 1 };
+Object.defineProperty(ui, 'bucketCol', { get: () => ui.bucketFill.colA, set: (v) => { ui.bucketFill.colA = v; }, enumerable: true });
 const view = { zoom: 1, panX: 0, panY: 0, dpr: 1, cssW: 1, cssH: 1 };
 
 let selection = [];          // selected strokes
@@ -266,6 +269,7 @@ function updateUndo() {
 // ---------------------------------------------------------------------------
 function getSource(root) {
   if (TPL_ROOTS.has(root)) return tpl[root];
+  if (root === 'bfill') return ui.bucketFill;
   if (root === 'light') return doc.light;
   if (root === 'doc') return doc;
   if (root === 'ui') return ui;
@@ -1291,6 +1295,13 @@ const actions = {
   },
   layerUp() { moveLayer(1); },
   layerDown() { moveLayer(-1); },
+  bucketFromFill() {
+    const f = clone(tpl.fill);
+    if (f.mode === 'none') f.mode = 'flat';
+    Object.assign(ui.bucketFill, { mode: f.mode, colA: f.colA, colB: f.colB, angle: f.angle, scale: f.scale, thick: f.thick, lit: f.lit, opacity: f.opacity });
+    refreshPanel();
+    flashHint('Bucket now fills with the Fill panel\'s settings.');
+  },
   layerDup() {
     const L = activeLayer();
     const N = Object.assign(clone(L), { id: newId('L'), name: L.name + ' copy' });
@@ -1386,12 +1397,14 @@ function bucketFill(w) {
   const L = activeLayer();
   const hit = hitTest(w.x, w.y, 0);
   if (hit && hit.stroke.bucket) {
-    hit.stroke.fill.colA = ui.bucketCol; touch(hit.stroke); commit(); dirty = true;
+    Object.assign(hit.stroke.fill, clone(ui.bucketFill)); touch(hit.stroke); commit(); dirty = true;
     return;
   }
   if (hit && hit.body && hit.stroke.style.mode !== 'none') {
     const st = hit.stroke.style;
-    st.colA = st.colB = ui.bucketCol; touch(hit.stroke);
+    // a line takes the bucket's colours: A along its length, and B too for gradient / texture fills
+    const bf = ui.bucketFill;
+    st.colA = bf.colA; st.colB = bf.mode === 'flat' ? bf.colA : bf.colB; touch(hit.stroke);
     if (selection.includes(hit.stroke)) refreshPanel();
     commit(); dirty = true;
     return;
@@ -1428,7 +1441,7 @@ function bucketFill(w) {
   const t = {
     shape: { spline: 'linear', closed: true },
     style: Object.assign(clone(tpl.style), { mode: 'none' }),
-    fill: Object.assign(clone(tpl.fill), { mode: 'flat', colA: ui.bucketCol, opacity: 1, lit: false }),
+    fill: Object.assign(clone(tpl.fill), clone(ui.bucketFill)),
     sym, rec: defaultRec(), warp,
   };
   const s = makeStroke(poly, t, L.id);
