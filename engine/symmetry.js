@@ -543,7 +543,7 @@ export function cropDomain(sym, pts, w, h) {
   const ox = +sym.cx, oy = +sym.cy, R2 = hyp ? Math.max(16, +sym.hR || 900) ** 2 : 0;
   const wt = (x, y) => (hyp ? 1 / Math.max(1e-6, R2 - (x - ox) ** 2 - (y - oy) ** 2) : 1);
   const scale = Math.max(w, h);
-  const eps = Math.max(1, scale * 0.002);
+  const eps = Math.max(0.25, scale * 1e-4);
   const imagesOf = (x, y) => base.slice(1).map((t) => mobApply(t.mob, x, y));
   const generic = (x, y) => {
     if (hyp && (x - ox) ** 2 + (y - oy) ** 2 >= R2 * 0.999) return false;
@@ -551,8 +551,13 @@ export function cropDomain(sym, pts, w, h) {
     return true;
   };
   let c = null;
+  // start a little way along the stroke, so a stroke begun exactly on a wall, corner or centre
+  // belongs to the cell it heads into
+  let i0 = 0;
+  while (i0 < pts.length - 1 && Math.hypot(pts[i0].x - pts[0].x, pts[i0].y - pts[0].y) < 1.5) i0++;
   const step = Math.max(1, Math.floor(pts.length / 64));
-  for (let i = 0; i < pts.length && !c; i += step) if (generic(pts[i].x, pts[i].y)) c = { x: pts[i].x, y: pts[i].y };
+  for (let i = i0; i < pts.length && !c; i += step) if (generic(pts[i].x, pts[i].y)) c = { x: pts[i].x, y: pts[i].y };
+  if (!c && generic(pts[0].x, pts[0].y)) c = { x: pts[0].x, y: pts[0].y };
   if (!c) {
     // every sample sits on a mirror / centre: nudge off it
     const p = pts[0];
@@ -571,31 +576,41 @@ export function cropDomain(sym, pts, w, h) {
     c = { x: ox + r * Math.cos(mid), y: oy - r * Math.sin(mid) };
   }
   if (sym.mode === 'wallpaper') {
-    // The guide's lattice cell holding c, intersected with c's Voronoi cell on the torus (the
-    // cell with opposite edges glued) among the orbit points of c. Every point of the torus has
-    // one lift into that parallelogram, so the copies tile exactly, and the cuts run along the
-    // guide's cell lines (plus the mirrors, or bisectors between rotation centres, inside it).
+    // Guide-aligned asymmetric unit. In lattice coordinates (u along a, v along b) the canonical
+    // cell D0 holds, of every orbit, the one point in [0,1)² whose images under the group's point
+    // operations (mod the lattice) have the smallest v, then the smallest u. Its walls are lattice
+    // lines, mirrors and lines through rotation centres: p1 is the whole cell, p2 the half v < ½,
+    // pm the half on one side of the mirror, p4 a quarter triangle, and so on. Each orbit has exactly
+    // one such point, so its images tile with no overlap and no gap. The stroke's own cell is the
+    // image of D0 that holds the start point: a pixel is kept when h⁻¹ of it lies in D0.
     const { a, b } = latticeBasis(sym);
     const det = a[0] * b[1] - a[1] * b[0];
     const Bi = [b[1] / det, -a[1] / det, -b[0] / det, a[0] / det];
-    const frac = (x, y) => { const dx = x - ox, dy = y - oy; return [Bi[0] * dx + Bi[2] * dy, Bi[1] * dx + Bi[3] * dy]; };
-    const fc = frac(c.x, c.y);
-    const cell = [Math.floor(fc[0]), Math.floor(fc[1])];
+    const g = WALLPAPER[sym.wp] || WALLPAPER.p1;
+    const cents = g.centred ? [[0, 0], [0.5, 0.5]] : [[0, 0]];
+    const ops = [];
+    for (const ct of cents) for (const o of g.ops) ops.push([o[0], o[1], o[2], o[3], o[4] + ct[0], o[5] + ct[1]]);
+    const apply = (o, f) => [o[0] * f[0] + o[1] * f[1] + o[4], o[2] * f[0] + o[3] * f[1] + o[5]];
     const red = (f) => [f[0] - Math.floor(f[0]), f[1] - Math.floor(f[1])];
-    const near = (p, q) => { const dx = Math.abs(p[0] - q[0]), dy = Math.abs(p[1] - q[1]); return Math.min(dx, 1 - dx) < 1e-4 && Math.min(dy, 1 - dy) < 1e-4; };
-    const rc = red(fc);
-    const reps = [];
-    for (const q of imagesOf(c.x, c.y)) {
-      if (!Number.isFinite(q.x)) continue;
-      const r = red(frac(q.x, q.y));
-      if (near(r, rc) || reps.some((x) => near(x, r))) continue;
-      reps.push(r);
+    const less = (p, q) => p[1] < q[1] - 1e-9 || (Math.abs(p[1] - q[1]) <= 1e-9 && p[0] < q[0] - 1e-9);
+    const dx = c.x - ox, dy = c.y - oy;
+    const fc = [Bi[0] * dx + Bi[2] * dy, Bi[1] * dx + Bi[3] * dy];
+    // h⁻¹ = (lattice shift) ∘ op, chosen so that h⁻¹(c) is c's canonical representative
+    let best = null;
+    for (const o of ops) {
+      const q = apply(o, fc), n = [-Math.floor(q[0]), -Math.floor(q[1])];
+      const r = [q[0] + n[0], q[1] + n[1]];
+      if (!best || less(r, best.r)) best = { r, h: [o[0], o[1], o[2], o[3], o[4] + n[0], o[5] + n[1]] };
     }
     const sites = new Float32Array(CROP_SITES * 3);
-    reps.slice(0, CROP_SITES).forEach((r, i) => {
-      sites[i * 3] = ox + a[0] * r[0] + b[0] * r[1]; sites[i * 3 + 1] = oy + a[1] * r[0] + b[1] * r[1]; sites[i * 3 + 2] = 1;
+    ops.slice(0, CROP_SITES).forEach((o, i) => {
+      // rotation part has entries in {-1, 0, 1}: pack it as one base-3 number
+      sites[i * 3] = (o[0] + 1) * 27 + (o[1] + 1) * 9 + (o[2] + 1) * 3 + (o[3] + 1);
+      sites[i * 3 + 1] = o[4]; sites[i * 3 + 2] = o[5];
     });
-    return { mode: 2, c: [c.x, c.y], w0: 1, sites, n: Math.min(CROP_SITES, reps.length), origin: [ox, oy], basis: [a[0], a[1], b[0], b[1]], inv: Bi, cell };
+    const h = best.h;
+    return { mode: 3, c: [c.x, c.y], w0: 1, sites, n: Math.min(CROP_SITES, ops.length), origin: [ox, oy],
+      basis: [a[0], a[1], b[0], b[1]], inv: Bi, h0: [h[0], h[1], h[4]], h1: [h[2], h[3], h[5]] };
   }
   const w0 = wt(c.x, c.y);
   const imgs = imagesOf(c.x, c.y)

@@ -398,11 +398,11 @@ export class Renderer {
     if (!D) { gl.uniform1f(P.uni.u_clipMode, 0); return; }
     gl.uniform1f(P.uni.u_clipMode, D.mode);
     gl.uniform1f(P.uni.u_clipN, D.n);
-    if (D.mode === 2) {
+    if (D.mode === 3) {
       gl.uniform2f(P.uni.u_clipO, D.origin[0], D.origin[1]);
-      gl.uniformMatrix2fv(P.uni.u_clipB, false, new Float32Array(D.basis));
       gl.uniformMatrix2fv(P.uni.u_clipBi, false, new Float32Array(D.inv));
-      gl.uniform2f(P.uni.u_clipCell, D.cell[0], D.cell[1]);
+      gl.uniform3f(P.uni.u_clipH0, D.h0[0], D.h0[1], D.h0[2]);
+      gl.uniform3f(P.uni.u_clipH1, D.h1[0], D.h1[1], D.h1[2]);
     }
     gl.uniform2f(P.uni.u_clipC, D.c[0], D.c[1]);
     gl.uniform1f(P.uni.u_clipW0, D.w0);
