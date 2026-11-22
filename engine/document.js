@@ -24,6 +24,10 @@ export function defaultStyle() {
     // graphite shading + ink outline (any mode)
     shadeEnds: 0, shadeLen: 1.5, shadeWhich: 'both', shadeEdge: 0, shadeSide: 0, shadeGrain: 0.35, shadeCol: '#262626',
     ink: 0, inkCol: '#000000',
+    // realistic media: ink pooling, paper tooth, bristle brush, stamp brush
+    pool: 0, tooth: 0.5,
+    hairs: 18, dryness: 0.45, hairSpread: 0.5, hairBlend: 0.6,
+    stampTip: 'round', stampImg: null, stampSpacing: 0.25, stampScatter: 0.3, stampRot: 0.5, stampSizeJit: 0.3, stampFlow: 0.6,
   };
 }
 export function defaultFill() {
@@ -35,7 +39,8 @@ export function defaultLayer(name = 'Layer 1') { return { id: newId('L'), name, 
 
 export function newDocument(w = 2048, h = 2048) {
   const L = defaultLayer();
-  return { format: FORMAT, version: FORMAT_VERSION, width: w, height: h, bg: '#0e0f13', light: defaultLight(), layers: [L], activeLayer: L.id, groups: [], blendEnds: true, strokes: [] };
+  return { format: FORMAT, version: FORMAT_VERSION, width: w, height: h, bg: '#0e0f13', light: defaultLight(), layers: [L], activeLayer: L.id, groups: [], blendEnds: true,
+    paperType: 'none', paperScale: 6, paperStrength: 0.6, assets: {}, strokes: [] };
 }
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -43,7 +48,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
 export function makeStroke(points, tpl, layer) {
   return {
     id: newId(), rev: nextRev(), layer, group: null,
-    points: points.map((p) => ({ x: +p.x, y: +p.y, p: p.p ?? 1, w: p.w ?? 1 })),
+    points: points.map((p) => ({ x: +p.x, y: +p.y, p: p.p ?? 1, w: p.w ?? 1, ...(p.s > 0 ? { s: +p.s } : {}) })),
     shape: clone(tpl.shape), style: clone(tpl.style), fill: clone(tpl.fill),
     sym: clone(tpl.sym), rec: clone(tpl.rec || defaultRec()), warp: clone(tpl.warp || defaultWarp()),
   };
@@ -72,6 +77,11 @@ export function normaliseDoc(raw) {
   if (typeof raw.bg === 'string') doc.bg = raw.bg;
   doc.light = Object.assign(defaultLight(), raw.light || {});
   doc.blendEnds = raw.blendEnds !== false;
+  if (['none', 'cold', 'hot', 'sketch', 'canvas'].includes(raw.paperType)) doc.paperType = raw.paperType;
+  doc.paperScale = Math.max(0.5, Math.min(200, num(raw.paperScale, 6)));
+  doc.paperStrength = Math.max(0, Math.min(1, num(raw.paperStrength, 0.6)));
+  doc.assets = {};
+  if (raw.assets && typeof raw.assets === 'object') for (const [k, v] of Object.entries(raw.assets)) if (typeof v === 'string' && v.startsWith('data:image/')) doc.assets[k] = v;
   if (Array.isArray(raw.layers) && raw.layers.length) {
     doc.layers = raw.layers.map((l, i) => Object.assign(defaultLayer('Layer ' + (i + 1)), l, { id: typeof l.id === 'string' ? l.id : newId('L') }));
   }
@@ -90,6 +100,7 @@ export function normaliseDoc(raw) {
       group: groupIds.has(s.group) ? s.group : null,
       points: s.points.map((p) => ({
         x: num(p.x, 0), y: num(p.y, 0), p: Math.max(0, Math.min(1, num(p.p, 1))), w: Math.max(0, Math.min(16, num(p.w, 1))),
+        ...(num(p.s, 0) > 0 ? { s: Math.min(1, num(p.s, 0)) } : {}),
       })),
       shape: Object.assign(defaultShape(), s.shape || {}),
       style: Object.assign(defaultStyle(), s.style || {}),
@@ -121,9 +132,12 @@ export function serialise(doc) {
   return JSON.stringify({
     format: FORMAT, version: FORMAT_VERSION, width: doc.width, height: doc.height, bg: doc.bg, light: doc.light,
     layers: doc.layers, activeLayer: doc.activeLayer, groups: doc.groups, blendEnds: doc.blendEnds !== false,
+    paperType: doc.paperType || 'none', paperScale: doc.paperScale ?? 6, paperStrength: doc.paperStrength ?? 0.6,
+    // only the pictures a stroke still uses
+    assets: Object.fromEntries(Object.entries(doc.assets || {}).filter(([k]) => doc.strokes.some((s) => s.style.stampImg === k))),
     strokes: doc.strokes.map((s) => ({
       id: s.id, layer: s.layer, group: s.group || null,
-      points: s.points.map((p) => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2), p: +p.p.toFixed(3), w: +(p.w ?? 1).toFixed(3) })),
+      points: s.points.map((p) => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2), p: +p.p.toFixed(3), w: +(p.w ?? 1).toFixed(3), ...(p.s > 0 ? { s: +p.s.toFixed(2) } : {}) })),
       shape: s.shape, style: s.style, fill: s.fill, sym: s.sym, rec: s.rec, warp: s.warp,
       ...(s.bucket ? { bucket: true } : {}),
       ...(s.cropAt ? { cropAt: s.cropAt } : {}),

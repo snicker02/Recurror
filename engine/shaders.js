@@ -12,6 +12,7 @@ precision mediump float;
 export const STROKE_MODES = {
   flat: 0, tube: 1, ribbon: 2, glow: 3, neon: 4, airbrush: 5, engrave: 6, bevel: 7, chrome: 8,
   rope: 9, sketch: 10, drybrush: 11, watercolor: 12, outline: 13, stitch: 14,
+  bristle: 15, stamp: 16,
 };
 /** Translucent wash modes: drawn without per-copy depth ordering (they are meant to layer). */
 export const SOFT_MODES = new Set([STROKE_MODES.airbrush, STROKE_MODES.watercolor]);
@@ -46,6 +47,40 @@ mat2 mobJ(vec2 p) {
 }
 ` + warpGLSL;
 
+export const PAPER = `
+// ---- paper: one sheet under every stroke and fill (world coordinates) ----
+uniform vec3 u_paper;        // type (0 none · 1 cold press · 2 hot press · 3 sketch · 4 canvas), grain size, strength
+float pp_hash(vec2 p) { p = fract(p * vec2(0.1031, 0.1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
+float pp_noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p), u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(pp_hash(i), pp_hash(i + vec2(1.0, 0.0)), u.x), mix(pp_hash(i + vec2(0.0, 1.0)), pp_hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float pp_cell(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  float F1 = 8.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 o = vec2(float(x), float(y));
+    vec2 site = o + vec2(pp_hash(i + o), pp_hash(i + o + 19.19));
+    F1 = min(F1, length(site - f));
+  }
+  return F1;
+}
+/** Paper height 0 (valley) … 1 (peak). */
+float paperH(vec2 w) {
+  int t = int(u_paper.x + 0.5);
+  if (t == 0) return 0.5;
+  vec2 p = w / max(u_paper.y, 0.5);
+  if (t == 1) return clamp(0.62 * (1.0 - pp_cell(p * 0.55)) + 0.25 * pp_noise(p * 1.9) + 0.13 * pp_noise(p * 4.7), 0.0, 1.0);
+  if (t == 2) return clamp(0.5 + 0.35 * (pp_noise(p * 0.8) - 0.5) + 0.25 * (pp_noise(p * 3.1) - 0.5), 0.0, 1.0);
+  if (t == 3) return clamp(0.45 * pp_noise(vec2(p.x * 2.6, p.y * 1.1)) + 0.35 * pp_noise(p * 5.0) + 0.2 * pp_noise(p * 11.0), 0.0, 1.0);
+  vec2 g = p * 0.9;                                   // canvas: an over-under thread weave
+  float over = mod(floor(g.x) + floor(g.y), 2.0);
+  float th = over > 0.5 ? 0.5 + 0.5 * cos(6.2832 * g.x) : 0.5 + 0.5 * cos(6.2832 * g.y);
+  float thread = over > 0.5 ? sin(3.1416 * fract(g.y)) : sin(3.1416 * fract(g.x));
+  return clamp(0.55 * thread + 0.15 * th + 0.3 * pp_noise(p * 3.7), 0.0, 1.0);
+}
+`;
+
 export const strokeVS = MAP + `
 attribute vec2 a_pos;
 attribute vec2 a_ext;
@@ -54,6 +89,7 @@ attribute vec2 a_tan;
 attribute float a_hw;
 attribute vec2 a_along;
 attribute float a_weave;
+attribute vec2 a_ink;         // (slowness of the pen, sharpness of the turn)
 
 uniform float u_lightFollow;  // 1 = light lives in each copy's local frame
 uniform float u_zOff;         // depth slice centre (recursion layering)
@@ -69,6 +105,8 @@ varying vec2 v_along;
 varying vec2 v_T;
 varying vec2 v_N;
 varying vec2 v_cl;            // local (pre-copy) position, for crop-to-cell
+varying vec2 v_ink;
+varying vec2 v_wp;            // world position (the paper lives here)
 
 void main() {
   vec2 w0 = mobP(a_pos);
@@ -83,6 +121,8 @@ void main() {
   gl_Position = vec4(c.xy, u_softZ > 0.5 ? 0.999 - 1.998 * i_idx : u_zOff + u_zScale * zv, 1.0);
   v_dc = a_vc * e;
   v_cl = a_pos + a_ext * e;
+  v_ink = a_ink;
+  v_wp = p;
   v_hw = a_hw;
   v_pad = pad;
   v_along = a_along;
@@ -93,8 +133,17 @@ void main() {
 }
 `;
 
-export const strokeFS = PREC + `
+export const strokeFS = PREC + PAPER + `
 uniform float u_mode;
+uniform float u_pool;        // ink pooling amount
+uniform float u_tooth;       // how much this stroke catches on the paper (0 = not at all)
+uniform vec4 u_bristle;      // hairs, dryness, spread on turns, colour blend
+uniform vec4 u_stamp;        // spacing (× width), scatter, rotation jitter, size jitter
+uniform vec3 u_stamp2;       // tip (0 round · 1 flat · 2 chalk · 3 sponge · 4 splatter · 5 image), flow, has image
+uniform float u_stampPad;    // the strip is this much wider than the brush (room for scatter)
+uniform sampler2D u_tip;
+varying vec2 v_ink;
+varying vec2 v_wp;
 uniform vec3 u_colA;
 uniform vec3 u_colB;
 uniform float u_grad;
@@ -203,6 +252,40 @@ float gradT(vec2 q, float rn) {
   if (u_grad < 3.5) return rn;
   float b = fract(chainS() / max(u_gradPeriod, 1.0));
   return 1.0 - abs(b * 2.0 - 1.0);
+}
+
+float tipShape(vec2 uv, float k) {
+  int t = int(u_stamp2.x + 0.5);
+  float r = length(uv);
+  if (t == 0) return 1.0 - smoothstep(0.3, 1.0, r);
+  if (t == 1) return 1.0 - smoothstep(0.7, 1.0, length(uv * vec2(3.2, 1.0)));
+  if (t == 2) {
+    float m = 1.0 - smoothstep(0.65, 1.0, r);
+    float g = 0.6 * vnoise2(uv * 5.0 + k * 3.1) + 0.4 * vnoise2(uv * 13.0 - k * 1.7);
+    return m * smoothstep(0.32, 0.62, g + 0.25 * (1.0 - r));
+  }
+  if (t == 3) {
+    float m = 1.0 - smoothstep(0.7, 1.0, r);
+    vec2 p = uv * 3.2 + k * 2.3, i = floor(p), f = fract(p);
+    float F1 = 8.0;
+    for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec2 o = vec2(float(x), float(y));
+      F1 = min(F1, length(o + vec2(hash2(i + o), hash2(i + o + 7.7)) - f));
+    }
+    return m * smoothstep(0.18, 0.34, F1);
+  }
+  if (t == 4) {
+    float m = 0.0;
+    for (int j = 0; j < 7; j++) {
+      float fj = float(j);
+      vec2 c = vec2(hash1(k * 3.1 + fj * 1.7), hash1(k * 5.3 + fj * 2.9)) * 1.6 - 0.8;
+      float rad = 0.07 + 0.17 * hash1(k * 7.9 + fj * 4.1);
+      m = max(m, 1.0 - smoothstep(rad * 0.75, rad, length(uv - c)));
+    }
+    return m;
+  }
+  if (any(greaterThan(abs(uv), vec2(1.0)))) return 0.0;
+  return texture2D(u_tip, uv * 0.5 + 0.5).a;
 }
 
 void main() {
@@ -355,6 +438,49 @@ void main() {
     vec2 dir = rn > 1e-4 ? lat / rn : vec2(0.0);
     vec3 nn = normalize(vec3(dir * t, sqrt(max(0.0, 1.0 - t * t))));
     col = shade(base, nn);
+  } else if (mode == 15) {
+    // bristle brush: separate hairs, each with its own load of paint; they run dry at different
+    // points and part on turns. Colours blend from A to B across the brush.
+    float N = max(u_bristle.x, 2.0);
+    float hx = clamp(v_dc.x / hw * 0.5 + 0.5, 0.0, 0.9999) * N;
+    float hi = floor(hx);
+    float ht = fract(hx) * 2.0 - 1.0;
+    float load = 0.35 + 0.65 * hash1(hi * 7.31 + u_seed);
+    float thick = (0.82 + 0.3 * hash1(hi * 3.17 + u_seed + 1.0)) * (1.0 - u_bristle.z * 0.6 * v_ink.y);
+    float hair = clamp((thick - abs(ht)) / (aa * N / hw * 0.5 + 1e-3) + 0.5, 0.0, 1.0);
+    float dryAt = u_chain.z * mix(1.4, 0.25, u_bristle.y) * (0.45 + 0.55 * load);
+    float run = 1.0 - smoothstep(dryAt * 0.55, dryAt, sC);
+    float streak = vnoise2(vec2(sC / max(u_baseHw * 0.35, 0.5), hi * 3.7 + u_seed));
+    float paint = clamp(run * 1.6 - (1.0 - load) * 0.4 - streak * (1.0 - run) * 1.2, 0.0, 1.0);
+    a = edge * hair * smoothstep(0.05, 0.35, paint);
+    vec3 hc = mix(u_colA, u_colB, clamp(hx / N + (hash1(hi * 1.9 + u_seed) - 0.5) * 0.35, 0.0, 1.0));
+    col = mix(base, hc, u_bristle.w) * (0.78 + 0.22 * sqrt(max(0.0, 1.0 - ht * ht)));
+    col += vec3(0.08) * pow(max(0.0, 1.0 - abs(ht + 0.35) * 2.2), 3.0);
+  } else if (mode == 16) {
+    // stamp brush: a tip shape stamped along the path with spacing, scatter, rotation and size jitter
+    float hT = hw / max(u_stampPad, 1.0);
+    float bT = max(u_baseHw, 0.25);
+    float sp = max(u_stamp.x * 2.0 * bT, 0.35);
+    float sA = sC + v_dc.y * (1.0 - linked);
+    float k0 = floor(sA / sp);
+    float acc = 0.0;
+    for (int i = -4; i <= 4; i++) {
+      float k = k0 + float(i);
+      float h1 = hash1(k * 1.37 + u_seed), h2 = hash1(k * 2.71 + u_seed + 3.0);
+      float h3 = hash1(k * 5.13 + u_seed + 7.0), h4 = hash1(k * 7.70 + u_seed + 11.0);
+      float cs = (k + 0.5) * sp + (h1 - 0.5) * sp * 0.8 * min(u_stamp.y, 1.0);
+      if (u_loop < 0.5 && (cs < -0.5 * sp || cs > u_chain.z + 0.5 * sp)) continue;
+      float sz = hT * max(0.1, 1.0 + (h3 - 0.5) * 2.0 * u_stamp.w);
+      float co = (h2 - 0.5) * 2.0 * u_stamp.y * hT;
+      vec2 d = vec2(sA - cs, v_dc.x - co) / max(sz, 1e-3);
+      if (abs(d.x) > 1.5 || abs(d.y) > 1.5) continue;
+      float rot = (h4 - 0.5) * 6.2832 * u_stamp.z;
+      float c = cos(rot), sn = sin(rot);
+      vec2 uv = vec2(c * d.x + sn * d.y, -sn * d.x + c * d.y);
+      acc = 1.0 - (1.0 - acc) * (1.0 - clamp(tipShape(uv, k), 0.0, 1.0) * u_stamp2.y);
+    }
+    a = acc;
+    geo = a;
   } else if (mode == 14) {
     // stitch: slanted marks across the stroke at a fixed spacing
     float P = max(u_stitch.x, 1e-3);
@@ -387,6 +513,34 @@ void main() {
     }
     col = mix(col, u_shadeCol, clamp(k, 0.0, 1.0));
   }
+  // ink pooling: the pen leaves more ink where it slows, on turns, along the edges and in the blots
+  // where it lands and lifts
+  if (u_pool > 0.0) {
+    float k = 0.55 * v_ink.x + 0.45 * v_ink.y;
+    float kEdge = smoothstep(0.55, 1.0, ax) * (0.3 + 0.7 * v_ink.x);
+    float kEnd = 0.0;
+    if (u_loop < 0.5) {
+      float de = min(linked > 0.5 && v_dc.y < 0.0 ? 1e9 : sC, linked > 0.5 && v_dc.y > 0.0 ? 1e9 : u_chain.z - sC);
+      if (u_join.x > 0.5) de = max(de, sC < u_chain.z * 0.5 ? 1e9 : de);
+      kEnd = 1.0 - smoothstep(0.0, max(u_baseHw, 0.25) * 2.2, de);
+    }
+    float kk = clamp(u_pool * (k + 0.6 * kEdge + 0.7 * kEnd), 0.0, 1.0);
+    col *= 1.0 - 0.6 * kk;
+    a = min(1.0, a * (1.0 + 0.25 * kk));
+  }
+  // paper: dry media skip the valleys of the sheet, washes settle into them
+  if (u_paper.x > 0.5 && u_tooth > 0.0) {
+    float hgt = paperH(v_wp);
+    float amt = clamp(u_tooth * u_paper.z, 0.0, 1.0);
+    if (mode == 12 || mode == 5) {
+      col *= 1.0 - 0.45 * amt * (1.0 - hgt);
+      a *= mix(1.0, 0.7 + 0.6 * (1.0 - hgt), amt);
+    } else {
+      float load = 0.42 + 0.35 * clamp(v_hw / max(u_baseHw, 0.25), 0.0, 1.2);
+      float keep = smoothstep(0.0, 0.28, hgt - (1.0 - load));
+      a *= mix(1.0, keep, amt);
+    }
+  }
   // ink outline: a pen line along both edges and round the caps (not across a blended join)
   if (u_ink > 0.0) {
     float rr = linked > 0.5 ? abs(v_dc.x) : r;
@@ -416,6 +570,7 @@ varying float v_side;
 varying float v_pxl;
 varying vec2 v_l0;
 varying vec2 v_l1;
+varying vec2 v_wp;
 void main() {
   vec2 w0 = mobP(a_pos);
   mat2 J = warpJ(w0) * mobJ(a_pos);
@@ -427,6 +582,7 @@ void main() {
   vec3 c = u_view * vec3(p, 1.0);
   gl_Position = vec4(c.xy, 0.0, 1.0);
   v_local = a_pos + off;
+  v_wp = p;
   v_side = a_side;
   v_pxl = pad;
   mat2 Ln = u_lightFollow > 0.5 ? mat2(1.0) : J * (1.0 / sl);
@@ -435,7 +591,8 @@ void main() {
 }
 `;
 
-export const fillFS = PREC + `
+export const fillFS = PREC + PAPER + `
+varying vec2 v_wp;
 uniform float u_fmode;
 uniform vec3 u_colA;
 uniform vec3 u_colB;
@@ -673,8 +830,32 @@ void main() {
     col = col * (u_ambient + (1.0 - u_ambient) * lam) + vec3(sp);
   }
   float a = u_opacity;
+  if (u_paper.x > 0.5) col *= 1.0 - 0.18 * u_paper.z * (0.6 - paperH(v_wp));
   if (u_fringe > 0.5) a *= clamp(0.5 - abs(v_side), 0.0, 1.0);
   gl_FragColor = vec4(col * a, a);
+}
+`;
+
+// Paper relief on the background: a multiply pass, lit from the top left.
+export const paperVS = `
+attribute vec2 a_pos;
+uniform mat3 u_invView;
+varying vec2 v_wp;
+void main() {
+  v_wp = (u_invView * vec3(a_pos, 1.0)).xy;
+  gl_Position = vec4(a_pos, 0.0, 1.0);
+}
+`;
+export const paperFS = PREC + PAPER + `
+varying vec2 v_wp;
+uniform float u_pxw;          // world units per pixel
+void main() {
+  float e = max(u_paper.y * 0.35, u_pxw);
+  float h = paperH(v_wp);
+  float hx = paperH(v_wp + vec2(e, 0.0)) - h, hy = paperH(v_wp + vec2(0.0, e)) - h;
+  float lit = clamp(0.5 + 1.6 * (-hx - hy), 0.0, 1.0);          // light from the top left
+  float k = 1.0 - u_paper.z * (0.16 * (1.0 - lit) + 0.08 * (1.0 - h));
+  gl_FragColor = vec4(vec3(k), 1.0);
 }
 `;
 

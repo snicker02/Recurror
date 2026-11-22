@@ -235,6 +235,8 @@
           <option value="watercolor">Watercolour</option>
           <option value="outline">Outline (hollow)</option>
           <option value="stitch">Stitch</option>
+          <option value="bristle">Bristle brush (hairs)</option>
+          <option value="stamp">Stamp brush (tip shape)</option>
         </select></div>
       <div class="row"><label>Width</label><input type="range" min="0.5" max="200" step="0.5" data-bind="style.width"><output></output></div>
       <div class="row"><label>Colour A</label><input type="color" data-bind="style.colA"></div>
@@ -252,14 +254,14 @@
       <div class="row"><label>Pressure</label><input type="range" min="0" max="1" step="0.01" data-bind="style.pressure"><output></output></div>
       <div class="row"><label>Taper in</label><input type="range" min="0" max="0.5" step="0.01" data-bind="style.taperStart"><output></output></div>
       <div class="row"><label>Taper out</label><input type="range" min="0" max="0.5" step="0.01" data-bind="style.taperEnd"><output></output></div>
-      <div class="row" data-show="style.mode=flat|tube|ribbon|bevel|chrome|engrave|rope|sketch|drybrush|outline|stitch"><label title="How a stroke's copies (and its self-crossings) stack where they overlap">Overlap</label>
+      <div class="row" data-show="style.mode=flat|tube|ribbon|bevel|chrome|engrave|rope|sketch|drybrush|outline|stitch|bristle|stamp"><label title="How a stroke's copies (and its self-crossings) stack where they overlap">Overlap</label>
         <select data-bind="style.overlap">
           <option value="later">Later part on top</option>
           <option value="earlier">Earlier part on top</option>
           <option value="weave">Weave (over / under)</option>
           <option value="blend">Draw order</option>
         </select></div>
-      <div class="row" data-show="style.overlap=weave&style.mode=flat|tube|ribbon|bevel|chrome|engrave|rope|sketch|drybrush|outline|stitch"><label>Flip weave</label><input type="checkbox" data-bind="style.weaveFlip"></div>
+      <div class="row" data-show="style.overlap=weave&style.mode=flat|tube|ribbon|bevel|chrome|engrave|rope|sketch|drybrush|outline|stitch|bristle|stamp"><label>Flip weave</label><input type="checkbox" data-bind="style.weaveFlip"></div>
       <p class="hint" id="weaveInfo" hidden></p>
       <div class="row"><label>Caps</label>
         <select data-bind="style.cap"><option value="round">Round</option><option value="butt">Butt</option></select></div>
@@ -271,6 +273,18 @@
       <div class="row" data-show="style.mode=sketch|drybrush|watercolor"><label title="Sketch: line wobble · Dry brush: how dry · Watercolour: grain and ragged edge">Roughness</label><input type="range" min="0" max="1" step="0.01" data-bind="style.rough"><output></output></div>
       <div class="row" data-show="style.mode=outline"><label>Rim</label><input type="range" min="0.05" max="0.95" step="0.01" data-bind="style.outline"><output></output></div>
       <div class="row" data-show="style.mode=stitch"><label>Spacing</label><input type="range" min="3" max="120" step="0.5" data-bind="style.stitchSpacing"><output></output></div>
+      <div class="row" data-show="style.mode=bristle"><label>Hairs</label><input type="range" min="4" max="48" step="1" data-bind="style.hairs"><output></output></div>
+      <div class="row" data-show="style.mode=bristle"><label title="How soon the hairs run out of paint">Dryness</label><input type="range" min="0" max="1" step="0.01" data-bind="style.dryness"><output></output></div>
+      <div class="row" data-show="style.mode=bristle"><label title="How far the hairs part on turns">Hair spread</label><input type="range" min="0" max="1" step="0.01" data-bind="style.hairSpread"><output></output></div>
+      <div class="row" data-show="style.mode=bristle"><label title="Blend Colour A into Colour B across the brush">Colour blend</label><input type="range" min="0" max="1" step="0.01" data-bind="style.hairBlend"><output></output></div>
+      <div class="row" data-show="style.mode=stamp"><label>Tip</label>
+        <select data-bind="style.stampTip"><option value="round">Round (soft)</option><option value="flat">Flat</option><option value="chalk">Chalk</option><option value="sponge">Sponge</option><option value="splatter">Splatter</option><option value="image">Picture…</option></select></div>
+      <div class="btns" data-show="style.mode=stamp"><button data-act="loadTip" title="Use a picture as the brush tip (dark or opaque parts paint)">Load tip picture…</button></div>
+      <div class="row" data-show="style.mode=stamp"><label title="Gap between stamps, in brush widths">Spacing</label><input type="range" min="0.03" max="2" step="0.01" data-bind="style.stampSpacing"><output></output></div>
+      <div class="row" data-show="style.mode=stamp"><label>Scatter</label><input type="range" min="0" max="2" step="0.01" data-bind="style.stampScatter"><output></output></div>
+      <div class="row" data-show="style.mode=stamp"><label>Rotation jitter</label><input type="range" min="0" max="1" step="0.01" data-bind="style.stampRot"><output></output></div>
+      <div class="row" data-show="style.mode=stamp"><label>Size jitter</label><input type="range" min="0" max="1" step="0.01" data-bind="style.stampSizeJit"><output></output></div>
+      <div class="row" data-show="style.mode=stamp"><label title="How much paint each stamp lays down">Flow</label><input type="range" min="0.02" max="1" step="0.01" data-bind="style.stampFlow"><output></output></div>
       <div class="row" data-show="style.mode=stitch"><label>Slant</label><input type="range" min="-2" max="2" step="0.01" data-bind="style.stitchSlant"><output></output></div>
     </details>
 
@@ -286,6 +300,8 @@
         <select data-bind="style.dash"><option value="none">Solid</option><option value="dash">Dashed</option><option value="dot">Dotted (spheres when shaded)</option></select></div>
       <div class="row" data-show="style.dash=dash"><label>Dash</label><input type="range" min="1" max="300" step="0.5" data-bind="style.dashLen"><output></output></div>
       <div class="row" data-show="style.dash=dash|dot"><label>Gap</label><input type="range" min="0" max="300" step="0.5" data-bind="style.dashGap"><output></output></div>
+      <div class="row"><label title="More ink where the pen slows, on turns, along the edges, and a blot where it lands and lifts">Ink pooling</label><input type="range" min="0" max="1" step="0.01" data-bind="style.pool"><output></output></div>
+      <div class="row"><label title="How much the stroke catches on the paper texture (Document → Paper). Dry media and washes react most.">Paper tooth</label><input type="range" min="0" max="1" step="0.01" data-bind="style.tooth"><output></output></div>
       <div class="row"><label title="Pen outline along both edges and round the ends (drawing units, 0 = off)">Ink outline</label><input type="range" min="0" max="12" step="0.1" data-bind="style.ink"><output></output></div>
       <div class="row"><label>Ink colour</label><input type="color" data-bind="style.inkCol"></div>
       <div class="row"><label title="Graphite shading where the line ends, as if it tucks under its neighbour">End shading</label><input type="range" min="0" max="1" step="0.01" data-bind="style.shadeEnds"><output></output></div>
@@ -329,6 +345,10 @@
     <details open>
       <summary>Document</summary>
       <div class="row"><label>Background</label><input type="color" data-bind="doc.bg"></div>
+      <div class="row"><label title="One paper surface under every stroke: pencil, dry brush, bristles and stamps skip its valleys, washes settle into them">Paper</label>
+        <select data-bind="doc.paperType"><option value="none">None (smooth)</option><option value="cold">Cold-press watercolour</option><option value="hot">Hot-press</option><option value="sketch">Toothy sketch paper</option><option value="canvas">Canvas</option></select></div>
+      <div class="row" data-show="doc.paperType=cold|hot|sketch|canvas"><label>Grain size</label><input type="range" min="1" max="40" step="0.5" data-bind="doc.paperScale"><output></output></div>
+      <div class="row" data-show="doc.paperType=cold|hot|sketch|canvas"><label>Paper strength</label><input type="range" min="0" max="1" step="0.01" data-bind="doc.paperStrength"><output></output></div>
       <div class="row"><label>Artboard</label>
         <select id="docSize">
           <option value="2048x2048">2048 × 2048</option>

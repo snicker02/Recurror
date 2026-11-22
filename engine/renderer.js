@@ -1,6 +1,6 @@
 // Recurror — WebGL1 renderer: layers → offscreen accumulation → screen / export.
 import {
-  strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS,
+  strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS, paperVS, paperFS,
   STROKE_MODES, ADDITIVE_MODES, SOFT_MODES, DASH_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
 } from './shaders.js';
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
@@ -69,6 +69,11 @@ function program(gl, vs, fs) {
   return { p, uni, att };
 }
 
+const PAPER_TYPES = { none: 0, cold: 1, hot: 2, sketch: 3, canvas: 4 };
+function paperUniform(doc) {
+  return [PAPER_TYPES[doc.paperType] || 0, Math.max(0.5, +doc.paperScale || 6), Math.max(0, Math.min(1, +(doc.paperStrength ?? 0.6)))];
+}
+
 // ?noinst in the page URL forces the per-copy fallback path (used by the tests)
 function o_noInstancing() { try { return /[?&]noinst\b/.test(location.search); } catch { return false; } }
 
@@ -84,6 +89,14 @@ export class Renderer {
     this.progFill = program(gl, fillVS, fillFS);
     this.progComp = program(gl, quadVS, compFS);
     this.progBlit = program(gl, quadVS, blitFS);
+    this.progPaper = program(gl, paperVS, paperFS);
+    // 1×1 placeholder bound when a stamp brush has no picture tip
+    this.blankTip = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.blankTip);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.tips = new Map();          // asset id → { tex } (picture tips for stamp brushes)
+    this.onAsset = null;            // called when a picture tip finishes loading (the app redraws)
     this.meshes = new Map();
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
@@ -252,6 +265,8 @@ export class Renderer {
     else { const bg = hexToRgb(doc.bg); gl.clearColor(bg[0], bg[1], bg[2], 1); }
     gl.clearDepth(1); gl.clearStencil(0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    this.paperU = paperUniform(doc);
+    if (!o.transparent && this.paperU[0] > 0) this.drawPaper(o, scissor);
 
     const live = new Set();
     for (const s of doc.strokes) live.add(s.id);
@@ -391,6 +406,67 @@ export class Renderer {
     return D;
   }
 
+  /** Multiply the paper's relief onto the background (artboard only). */
+  drawPaper(o, scissor) {
+    const gl = this.gl, P = this.progPaper, m = o.viewMat;
+    // inverse of the affine view matrix (column-major 3×3)
+    const a = m[0], b = m[1], c = m[3], d = m[4], tx = m[6], ty = m[7];
+    const det = a * d - b * c;
+    const ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+    const inv = new Float32Array([ia, ib, 0, ic, id, 0, -(ia * tx + ic * ty), -(ib * tx + id * ty), 1]);
+    gl.useProgram(P.p);
+    gl.uniformMatrix3fv(P.uni.u_invView, false, inv);
+    gl.uniform3f(P.uni.u_paper, this.paperU[0], this.paperU[1], this.paperU[2]);
+    gl.uniform1f(P.uni.u_pxw, o.pxWorld);
+    scissor();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.DST_COLOR, gl.ZERO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    this.setAttribs([P.att.a_pos]);
+    gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /** Texture for a stamp brush's picture tip (alpha = the tip), loaded once from the document's assets. */
+  tipTexture(doc, id) {
+    if (!id || !doc.assets || !doc.assets[id]) return null;
+    const hit = this.tips.get(id);
+    if (hit) return hit.tex;
+    const entry = { tex: null };
+    this.tips.set(id, entry);
+    const img = new Image();
+    img.onload = () => {
+      const gl = this.gl, N = 128;
+      const cv = document.createElement('canvas'); cv.width = cv.height = N;
+      const cx = cv.getContext('2d');
+      cx.drawImage(img, 0, 0, N, N);
+      const px = cx.getImageData(0, 0, N, N).data;
+      // a picture with transparency uses its alpha; an opaque one uses its darkness
+      let opaque = true;
+      for (let i = 3; i < px.length; i += 4) if (px[i] < 250) { opaque = false; break; }
+      const out = new Uint8Array(N * N * 4);
+      for (let i = 0; i < N * N; i++) {
+        const r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2], al = px[i * 4 + 3];
+        const v = opaque ? 255 - (0.299 * r + 0.587 * g + 0.114 * b) : al;
+        out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = 255; out[i * 4 + 3] = v;
+      }
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, out);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      entry.tex = tex;
+      if (this.onAsset) this.onAsset();
+    };
+    img.src = doc.assets[id];
+    return null;
+  }
+
   /** Crop-to-cell uniforms (engine/symmetry.js cropDomain), cached per stroke revision and symmetry. */
   setCrop(P, doc, s) {
     const gl = this.gl;
@@ -495,6 +571,7 @@ export class Renderer {
       gl.uniform1f(P.uni.u_spec, doc.light.spec);
       gl.uniform1f(P.uni.u_shine, doc.light.shine);
       gl.uniform1f(P.uni.u_lightFollow, follow);
+      { const pu = this.paperU || [0, 6, 0.6]; gl.uniform3f(P.uni.u_paper, pu[0], pu[1], pu[2]); }
       this.setWarp(P, s);
       this.setCrop(P, doc, s);
       gl.enable(gl.STENCIL_TEST);
@@ -540,7 +617,7 @@ export class Renderer {
 
     this.uploadInstances(xs);
     const A = P.att, B = STROKE_STRIDE * 4;
-    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along].concat(weaving ? [A.a_weave] : []),
+    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along, A.a_ink].concat(weaving ? [A.a_weave] : []),
       this.inst ? [A.i_mA, A.i_mB, A.i_conj, A.i_idx] : []);
     gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
     gl.vertexAttribPointer(A.a_pos, 2, gl.FLOAT, false, B, 0);
@@ -549,6 +626,7 @@ export class Renderer {
     gl.vertexAttribPointer(A.a_tan, 2, gl.FLOAT, false, B, 24);
     gl.vertexAttribPointer(A.a_hw, 1, gl.FLOAT, false, B, 32);
     gl.vertexAttribPointer(A.a_along, 2, gl.FLOAT, false, B, 36);
+    gl.vertexAttribPointer(A.a_ink, 2, gl.FLOAT, false, B, 44);
     if (A.a_weave !== undefined && A.a_weave >= 0) {
       if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 1, gl.FLOAT, false, 0, 0); }
       else gl.vertexAttrib1f(A.a_weave, 0);
@@ -580,6 +658,24 @@ export class Renderer {
     gl.uniform2f(P.uni.u_stitch, fit(Math.max(1, +st.stitchSpacing || 14)), +(st.stitchSlant ?? 0.6));
     gl.uniform1f(P.uni.u_seed, (seedOf(s.id || 'x') % 997) * 0.731);
     gl.uniform1f(P.uni.u_baseHw, Math.max(0.25, (+st.width || 18) * 0.5));
+    {
+      const pu = this.paperU || [0, 6, 0.6];
+      gl.uniform3f(P.uni.u_paper, pu[0], pu[1], pu[2]);
+      const TOOTH = { sketch: 1, drybrush: 1, bristle: 1, stamp: 1, watercolor: 1, airbrush: 0.8 };
+      gl.uniform1f(P.uni.u_tooth, Math.max(0, Math.min(1.5, (st.tooth ?? 0.5) * 2 * (TOOTH[st.mode] ?? 0.3))));
+      gl.uniform1f(P.uni.u_pool, Math.max(0, Math.min(1, +st.pool || 0)));
+      gl.uniform4f(P.uni.u_bristle, Math.max(2, Math.min(64, Math.round(+st.hairs || 18))), +(st.dryness ?? 0.45), +(st.hairSpread ?? 0.5), +(st.hairBlend ?? 0.6));
+      gl.uniform4f(P.uni.u_stamp, Math.max(0.03, +(st.stampSpacing ?? 0.25)), Math.max(0, +(st.stampScatter ?? 0.3)), +(st.stampRot ?? 0.5), +(st.stampSizeJit ?? 0.3));
+      const TIPS = { round: 0, flat: 1, chalk: 2, sponge: 3, splatter: 4, image: 5 };
+      let tip = TIPS[st.stampTip] ?? 0;
+      const tex = tip === 5 ? this.tipTexture(doc, st.stampImg) : null;
+      if (tip === 5 && !tex) tip = 0;
+      gl.uniform3f(P.uni.u_stamp2, tip, Math.max(0.02, Math.min(1, +(st.stampFlow ?? 0.6))), tex ? 1 : 0);
+      gl.uniform1f(P.uni.u_stampPad, st.mode === 'stamp' ? 1 + Math.max(0, +st.stampScatter || 0) + Math.max(0, +st.stampSizeJit || 0) * 0.5 : 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex || this.blankTip);
+      gl.uniform1i(P.uni.u_tip, 2);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     {
       const sc = hexToRgb(st.shadeCol || '#262626'), ic = hexToRgb(st.inkCol || '#000000'), which = st.shadeWhich || 'both';
       gl.uniform4f(P.uni.u_shade, +st.shadeEnds || 0, Math.max(0.5, (+st.shadeLen || 1.5) * (+st.width || 18)), +st.shadeEdge || 0, +(st.shadeGrain ?? 0.35));

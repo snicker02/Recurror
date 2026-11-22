@@ -113,6 +113,16 @@ New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour
 - **Edge shading** with **Edge side** (left, both or right), **Grain** (pencil texture) and **Shade colour**.
 - Presets: Tangle strand, Tangle tube, Inked colour band. Draw a pattern such as Y-Braid piece by piece; each piece's ends get the tuck shading.
 
+## Realistic media
+
+**Paper** (Document panel): one sheet under every stroke and fill. Cold-press watercolour, hot-press, toothy sketch paper or canvas, with **Grain size** and **Paper strength**. Its relief shows on the background, dry media (pencil, dry brush, bristles, stamps) skip its valleys, harder pressure fills more of them, and washes (watercolour, airbrush) settle into them and granulate. Each brush's **Paper tooth** sets how much it catches; dry media and washes react most by default.
+
+**Ink pooling** (Brush section): more ink where the pen slowed down (the drawing speed is recorded with each freehand stroke), on sharp turns and along the edges, plus a round blot where the pen lands and lifts. Presets: Fineliner, Fountain pen, Ink brush pen.
+
+**Bristle brush** (shading mode): the stroke is drawn as separate hairs (**Hairs** 4–48). Each hair carries its own load of paint and runs dry at its own point (**Dryness**), the hairs part on turns (**Hair spread**), and colours blend from A to B across the brush (**Colour blend**). Presets: Oil bristle, Gouache.
+
+**Stamp brush** (shading mode): a tip stamped along the path with **Spacing**, **Scatter**, **Rotation jitter**, **Size jitter** and **Flow**. Tips: round (soft), flat, chalk, sponge, splatter, or a picture you load (its dark or opaque parts paint; it's saved inside the document). Presets: Charcoal, Soft pastel, Spray paint, Sponge.
+
 ## Pattern fills
 
 Five fill patterns of Recurror's own design, in both the Fill panel and the bucket: **Plaitwork** (ribbons woven over and under, shaded where they dive), **Pebbles** (packed stones lit from the top left), **Scallops** (rows of shell scales tucked under the row above), **Orb rings** (a hex grid of ringed orbs) and **Chevron folds** (a ribbon folded back and forth). Colour A is the paper, Colour B the ink and shading; Angle, Scale and Weight (line weight) apply.
@@ -205,6 +215,8 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.11.0**: Realistic media: shared paper texture (cold press, hot press, sketch, canvas), ink pooling from recorded drawing speed, bristle brush, stamp brush with picture tips, and nine new presets.
 
 - **2.10.0**: Frieze symmetry (all 7 strip groups, with crop to cell) and five original pattern fills: Plaitwork, Pebbles, Scallops, Orb rings, Chevron folds.
 
