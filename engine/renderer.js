@@ -546,6 +546,14 @@ export class Renderer {
     gl.uniform2f(P.uni.u_stitch, fit(Math.max(1, +st.stitchSpacing || 14)), +(st.stitchSlant ?? 0.6));
     gl.uniform1f(P.uni.u_seed, (seedOf(s.id || 'x') % 997) * 0.731);
     gl.uniform1f(P.uni.u_baseHw, Math.max(0.25, (+st.width || 18) * 0.5));
+    {
+      const sc = hexToRgb(st.shadeCol || '#262626'), ic = hexToRgb(st.inkCol || '#000000'), which = st.shadeWhich || 'both';
+      gl.uniform4f(P.uni.u_shade, +st.shadeEnds || 0, Math.max(0.5, (+st.shadeLen || 1.5) * (+st.width || 18)), +st.shadeEdge || 0, +(st.shadeGrain ?? 0.35));
+      gl.uniform3f(P.uni.u_shade2, which !== 'end' ? 1 : 0, which !== 'start' ? 1 : 0, +st.shadeSide || 0);
+      gl.uniform3f(P.uni.u_shadeCol, sc[0], sc[1], sc[2]);
+      gl.uniform1f(P.uni.u_ink, Math.max(0, +st.ink || 0));
+      gl.uniform3f(P.uni.u_inkCol, ic[0], ic[1], ic[2]);
+    }
     gl.uniform1f(P.uni.u_loop, loop ? 1 : 0);
     gl.uniform3f(P.uni.u_light, light[0], light[1], light[2]);
     gl.uniform1f(P.uni.u_ambient, doc.light.ambient);
@@ -692,6 +700,23 @@ export class Renderer {
   }
 
   // ---- export -----------------------------------------------------------
+  /** Raw RGBA of the whole artboard at W×H, rows top-down (paint bucket sampling). */
+  renderPixels(doc, W, H) {
+    const gl = this.gl;
+    const T = this.makeTargets(W, H);
+    try {
+      const vm = new Float32Array([2 / doc.width, 0, 0, 0, 2 / doc.height, 0, -1, -1, 1]);
+      const used = this.render(doc, { viewMat: vm, pxWorld: doc.width / W, width: W, height: H, artRect: null, transparent: false, target: T, prune: false });
+      const px = new Uint8Array(W * H * 4);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, used.A.fbo);
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return px;
+    } finally {
+      this.freeTargets(T);
+    }
+  }
+
   exportCanvas(doc, scale, transparent) {
     const gl = this.gl;
     const fancy = doc.layers.some((l) => l.visible && ((l.blend || 'normal') !== 'normal' || l.opacity < 0.999));

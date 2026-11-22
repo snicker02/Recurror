@@ -45,6 +45,7 @@
     <button data-tool="edit" title="Select / edit: click, Shift-click to add, drag on empty space to box-select; drag handles; Alt-click deletes a point; double-click inserts (V)">⬚<small>Edit</small></button>
     <button data-tool="width" title="Width: drag a control point's ring to set its width; Alt-click resets (W)">◎<small>Width</small></button>
     <button data-tool="center" title="Place symmetry centre (C)">⊕<small>Centre</small></button>
+    <button data-tool="bucket" title="Paint bucket: fill a closed area under the lines; click a fill again to recolour it (K)">◩<small>Bucket</small></button>
     <button data-tool="pan" title="Pan (H, or hold Space)">✥<small>Pan</small></button>
   </nav>
 
@@ -55,6 +56,16 @@
   </section>
 
   <aside id="panel">
+    <details open id="bucketSection" data-show="ui.tool=bucket">
+      <summary>Bucket <span class="hint">(fill tool)</span></summary>
+      <div class="row"><label>Colour</label><input type="color" data-bind="ui.bucketCol"></div>
+      <div class="row"><label title="How different a colour may be and still count as the same area (0–255)">Tolerance</label><input type="range" min="0" max="200" step="1" data-bind="ui.bucketTol"><output></output></div>
+      <div class="row"><label title="Close breaks in the lines up to about twice this wide (drawing units), so the fill doesn't leak out">Gap close</label><input type="range" min="0" max="20" step="0.5" data-bind="ui.bucketGap"><output></output></div>
+      <div class="row"><label title="Fill the matching area in every symmetric copy (uses the current symmetry settings)">Symmetric copies</label><input type="checkbox" data-bind="ui.bucketSym"></div>
+      <div class="row"><label title="Fills of empty areas go to the bottom of the active layer, under its lines.">Under the lines</label><input type="checkbox" data-bind="ui.bucketUnder"></div>
+      <p class="hint">Click a closed area to fill it, or click on a line to recolour the line itself (its shading stays). Click a fill again to recolour it; select it with Edit to delete it.</p>
+    </details>
+
     <details open>
       <summary>Layers</summary>
       <div id="layersList"></div>
@@ -63,6 +74,17 @@
         <button data-act="layerUp" title="Move active layer up">▲</button>
         <button data-act="layerDown" title="Move active layer down">▼</button>
         <button data-act="layerDel" class="danger" title="Delete active layer and its strokes">Delete</button>
+      </div>
+      <div class="btns">
+        <button data-act="layerDup" title="Duplicate the active layer and all its strokes">⧉ Duplicate</button>
+        <button data-act="layerMerge" title="Merge the active layer into the one below">⤓ Merge down</button>
+        <button data-act="layerSolo" title="Show only the active layer (again to show all)">◉ Solo</button>
+        <button data-act="layerRename" title="Rename the active layer (or double-click its name)">✎ Rename</button>
+      </div>
+      <div class="btns">
+        <button data-act="copy" title="Copy the selected strokes, or the whole active layer when nothing is selected (Ctrl+C)">Copy</button>
+        <button data-act="cut" title="Cut the selected strokes, or the whole active layer's strokes (Ctrl+X)">Cut</button>
+        <button data-act="paste" title="Paste into the active layer, in place (Ctrl+V)">Paste</button>
       </div>
     </details>
 
@@ -236,6 +258,16 @@
         <select data-bind="style.dash"><option value="none">Solid</option><option value="dash">Dashed</option><option value="dot">Dotted (spheres when shaded)</option></select></div>
       <div class="row" data-show="style.dash=dash"><label>Dash</label><input type="range" min="1" max="300" step="0.5" data-bind="style.dashLen"><output></output></div>
       <div class="row" data-show="style.dash=dash|dot"><label>Gap</label><input type="range" min="0" max="300" step="0.5" data-bind="style.dashGap"><output></output></div>
+      <div class="row"><label title="Pen outline along both edges and round the ends (drawing units, 0 = off)">Ink outline</label><input type="range" min="0" max="12" step="0.1" data-bind="style.ink"><output></output></div>
+      <div class="row"><label>Ink colour</label><input type="color" data-bind="style.inkCol"></div>
+      <div class="row"><label title="Graphite shading where the line ends, as if it tucks under its neighbour">End shading</label><input type="range" min="0" max="1" step="0.01" data-bind="style.shadeEnds"><output></output></div>
+      <div class="row"><label title="How far the end shading reaches, in stroke widths">Shade length</label><input type="range" min="0.2" max="6" step="0.05" data-bind="style.shadeLen"><output></output></div>
+      <div class="row"><label>Shade ends</label>
+        <select data-bind="style.shadeWhich"><option value="both">Both</option><option value="start">Start</option><option value="end">End</option></select></div>
+      <div class="row"><label title="Graphite along the edges of the line">Edge shading</label><input type="range" min="0" max="1" step="0.01" data-bind="style.shadeEdge"><output></output></div>
+      <div class="row"><label title="−1 = left edge only, 0 = both, 1 = right edge only">Edge side</label><input type="range" min="-1" max="1" step="0.05" data-bind="style.shadeSide"><output></output></div>
+      <div class="row"><label title="Pencil grain in the shading">Grain</label><input type="range" min="0" max="1" step="0.01" data-bind="style.shadeGrain"><output></output></div>
+      <div class="row"><label>Shade colour</label><input type="color" data-bind="style.shadeCol"></div>
     </details>
 
     <details open>

@@ -29,6 +29,9 @@ engine/
   shaders.js        GLSL ES 1.00: Möbius + warp vertex path, stroke/fill shading, texture fills, layer blend modes
   renderer.js       layer targets, compositing, copy culling, depth-ordered overlaps, export
   guides.js         symmetry guides as world geometry; snapping
+  bucket.js         paint bucket: flood fill, contour trace, keyhole polygon
+  noise.js          seeded value noise for brush jitter and wobble
+  tabs.js           phone layout: panel sections as tabs under the drawing
   overlay.js        2D overlay: guides, selection, handles, width rings, marquee, snap marker
   document.js       document model (layers, groups), v1 migration, history
 ```
@@ -99,6 +102,24 @@ The warps are swirl, twirl, spherical, bubble, eyefish, sinusoidal, horseshoe, w
 Inner sides of tight bends are clamped to the radius of curvature, so wide strokes no longer fold over themselves into dark fans.
 
 New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour, Pearls, Dotted line, Dashed line, Neon outline, Cross stitch.
+
+**Shading and ink (any shading mode)**, for Zentangle-style strands:
+- **Ink outline**: a pen line of the chosen width along both edges and round the ends. It isn't drawn across a blended join.
+- **End shading** with **Shade length** (in stroke widths) and **Shade ends** (both, start or end): graphite that darkens toward the ends of the line, as if it tucks under its neighbour. The shading reaches further along the edges than down the middle, so it curves like hand shading.
+- **Edge shading** with **Edge side** (left, both or right), **Grain** (pencil texture) and **Shade colour**.
+- Presets: Tangle strand, Tangle tube, Inked colour band. Draw a pattern such as Y-Braid piece by piece; each piece's ends get the tuck shading.
+
+## Paint bucket (K)
+
+Click a closed area to fill it. The drawing is rendered, flood-filled by colour (**Tolerance**), traced and stored as an ordinary vector fill: a closed polyline whose holes are joined by zero-width bridges, so even-odd filling keeps islands as holes.
+- **Gap close** stops the fill leaking through breaks up to about twice that wide.
+- Fills of empty areas go to the bottom of the active layer, under its lines, and spread a pixel or two under them so no hairline shows. Turn off **Under the lines** to put them on top.
+- **Symmetric copies** gives the fill the current symmetry, so one click fills every matching area.
+- Click on a line itself to recolour the line (its shading and ink stay). Click an existing fill to recolour it.
+
+## Layers
+
+Besides show/hide, lock, opacity and blend mode: **Duplicate**, **Merge down**, **Solo** (show only this layer; again to show all), **Rename**, and **Copy / Cut / Paste** (Ctrl+C / X / V). Copy takes the selected strokes, or the whole active layer when nothing is selected; Paste puts copies in place on the active layer, also across documents in the same browser.
 
 ## Fills
 
@@ -173,6 +194,12 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.7.0**: Zentangle tools.
+  - Ink outline and graphite shading (end shading, edge shading, grain) for any brush, with Tangle strand / Tangle tube / Inked colour band presets.
+  - Paint bucket tool (K): fills closed areas as vector fills under the lines, with gap closing and symmetric copies; clicking a line recolours it.
+  - Layers: Duplicate, Merge down, Solo, Rename button, and Copy / Cut / Paste.
+  - On phones, the Bucket tab appears while the bucket tool is active.
 
 - **2.6.0**: More brushes.
   - Six new shading modes: Rope, Pencil sketch, Dry brush, Watercolour, Outline (hollow) and Stitch.

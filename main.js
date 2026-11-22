@@ -1,5 +1,6 @@
 // Recurror — recursive mirror drawing with splines. App wiring, tools, UI.
 import { initPanelTabs } from './engine/tabs.js';
+import { floodRegion, traceRegion, keyhole } from './engine/bucket.js';
 import { Renderer } from './engine/renderer.js';
 import { drawOverlay, viewPoint } from './engine/overlay.js';
 import {
@@ -12,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.6.0';
+export const VERSION = '2.7.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -27,6 +28,7 @@ const stage = $('#stage');
 const octx = ovCanvas.getContext('2d');
 
 let renderer = null;
+let panelTabs = null;         // phone tab layout (engine/tabs.js)
 try { renderer = new Renderer(glCanvas); }
 catch (err) {
   const box = $('#glError');
@@ -41,7 +43,7 @@ const tpl = {
   shape: defaultShape(), style: defaultStyle(), fill: defaultFill(),
   sym: defaultSym(doc.width, doc.height), rec: defaultRec(), warp: defaultWarp(),
 };
-const ui = { tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
+const ui = { bucketCol: '#000000', bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
 const view = { zoom: 1, panX: 0, panY: 0, dpr: 1, cssW: 1, cssH: 1 };
 
 let selection = [];          // selected strokes
@@ -77,6 +79,7 @@ const HINTS = {
   width: 'Width: drag outward from a control point to set its width · Alt-click resets it to 1',
   center: 'Centre: click or drag to place the symmetry centre (snaps to artboard landmarks when Snap is on)',
   pan: 'Pan: drag to move the view · wheel to zoom',
+  bucket: 'Bucket: click a closed area to fill it (fills go under the lines) · click a fill again to recolour it · Gap closes small breaks in the lines (K)',
 };
 const TOUCH_HINTS = {
   draw: 'Draw: drag to sketch · tap to place points, double-tap to finish · pinch to zoom',
@@ -85,11 +88,12 @@ const TOUCH_HINTS = {
   width: 'Width: drag outward from a control point to set its width',
   center: 'Centre: tap or drag to place the symmetry centre',
   pan: 'Pan: drag to move · pinch to zoom',
+  bucket: 'Bucket: tap a closed area to fill it · tap a fill to recolour it · pinch to zoom',
 };
 if (window.matchMedia && matchMedia('(pointer: coarse)').matches) Object.assign(HINTS, TOUCH_HINTS);
 
 // presets reset the brush-shape modifiers first, so switching looks never inherits a leftover nib or dash
-const SHAPE_RESET = { nibRatio: 1, jitter: 0, wobble: 0, dash: 'none' };
+const SHAPE_RESET = { nibRatio: 1, jitter: 0, wobble: 0, dash: 'none', shadeEnds: 0, shadeEdge: 0, ink: 0 };
 const PRESETS = {
   'Gilded tube': { mode: 'tube', colA: '#f2c46d', colB: '#c2410c', grad: 'along', width: 18, opacity: 1 },
   'Neon': { mode: 'neon', colA: '#22d3ee', colB: '#e879f9', grad: 'along', width: 22, glow: 1.2, taperStart: 0, taperEnd: 0, opacity: 1 },
@@ -111,6 +115,12 @@ const PRESETS = {
   'Dotted line': { mode: 'flat', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 7, dash: 'dot', dashGap: 14, taperStart: 0, taperEnd: 0, pressure: 0, opacity: 1 },
   'Dashed line': { mode: 'flat', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 6, dash: 'dash', dashLen: 26, dashGap: 14, taperStart: 0, taperEnd: 0, pressure: 0, cap: 'butt', opacity: 1 },
   'Neon outline': { mode: 'outline', colA: '#5eead4', colB: '#0ea5e9', grad: 'along', width: 26, outline: 0.28, taperStart: 0, taperEnd: 0, opacity: 1 },
+  'Tangle strand': { mode: 'flat', colA: '#f7f5ef', colB: '#f7f5ef', grad: 'none', width: 34, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'later',
+    ink: 2.4, inkCol: '#0a0a0a', shadeEnds: 0.92, shadeLen: 1.5, shadeWhich: 'both', shadeEdge: 0.3, shadeSide: 0, shadeGrain: 0.3, shadeCol: '#2a2a2a', opacity: 1 },
+  'Tangle tube': { mode: 'tube', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 30, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'later',
+    ink: 2, inkCol: '#0a0a0a', shadeEnds: 0.85, shadeLen: 1.2, shadeWhich: 'both', shadeEdge: 0, shadeSide: 0, shadeGrain: 0.3, shadeCol: '#1f1f1f', opacity: 1 },
+  'Inked colour band': { mode: 'flat', colA: '#f472b6', colB: '#60a5fa', grad: 'along', width: 34, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'later',
+    ink: 2.4, inkCol: '#0a0a0a', shadeEnds: 0.6, shadeLen: 1.2, shadeWhich: 'both', shadeEdge: 0.25, shadeSide: 0, shadeGrain: 0.5, shadeCol: '#1e1b4b', opacity: 1 },
   'Cross stitch': { mode: 'stitch', colA: '#fca5a5', colB: '#b91c1c', grad: 'none', width: 18, stitchSpacing: 12, stitchSlant: 0.9, taperStart: 0, taperEnd: 0, opacity: 1 },
 };
 
@@ -484,7 +494,10 @@ function dropFromSelection(layerId) {
 // ---------------------------------------------------------------------------
 function setTool(t) {
   if (penPoints.length && !((ui.tool === 'pen' || ui.tool === 'draw') && (t === 'pen' || t === 'draw'))) finishPen(false);
+  const was = ui.tool;
   ui.tool = t;
+  updateVisibility();
+  if (t === 'bucket' && was !== 'bucket' && panelTabs && document.body.classList.contains('tabbed')) panelTabs.show($('#bucketSection'));
   for (const b of $$('#tools button')) b.classList.toggle('active', b.dataset.tool === t);
   hover = null; handleHot = -1; widthHot = -1; snapShow = null;
   updateCursorClass();
@@ -506,6 +519,7 @@ function updateCursorClass() {
   if (t === 'pan') ovCanvas.classList.add(drag && drag.kind === 'pan' ? 'panning' : 'pan');
   else if (t === 'edit') ovCanvas.classList.add(hover && handleHot < 0 ? 'move' : 'edit');
   else if (t === 'width') ovCanvas.classList.add('width');
+  else if (t === 'bucket') ovCanvas.classList.add('bucket');
 }
 
 function makePreview(points, overrides = {}) {
@@ -544,8 +558,8 @@ function bound(s) {
 }
 
 /** Hit test across every copy of every editable stroke, topmost first. */
-function hitTest(wx, wy) {
-  const slop = 5 / view.zoom;
+function hitTest(wx, wy, slopPx = 5) {
+  const slop = slopPx / view.zoom;
   for (const s of strokesTopFirst()) {
     if (!editable(s)) continue;
     const xs = allTransformsCached(s.sym, s.rec, doc.width, doc.height);
@@ -571,7 +585,7 @@ function hitTest(wx, wy) {
       const tol = hwLocal + slop / sc;
       if (Math.hypot(l.x - b.x, l.y - b.y) > b.r + tol) continue;
       const near = nearestOnPolyline(sm, l.x, l.y, closed);
-      if (near.d <= tol || (hasFill && pointInPolygon(sm, l.x, l.y))) return { stroke: s, k, inv: inv[k], near };
+      if (near.d <= tol || (hasFill && pointInPolygon(sm, l.x, l.y))) return { stroke: s, k, inv: inv[k], near, body: near.d <= tol };
     }
   }
   return null;
@@ -829,6 +843,7 @@ function onPointerDown(e) {
   switch (tool) {
     case 'draw': if (canDrawHere()) beginDraw(w, e, sx, sy); break;
     case 'pen': if (canDrawHere()) penClick(w, sx, sy); break;
+    case 'bucket': if (canDrawHere()) bucketFill(w); break;
     case 'center': setCenter(snapWorld(w.x, w.y, 'artboard')); drag = { kind: 'center' }; break;
     case 'width': {
       let h = widthHandleAt(sx, sy);
@@ -1263,7 +1278,139 @@ const actions = {
   },
   layerUp() { moveLayer(1); },
   layerDown() { moveLayer(-1); },
+  layerDup() {
+    const L = activeLayer();
+    const N = Object.assign(clone(L), { id: newId('L'), name: L.name + ' copy' });
+    doc.layers.splice(doc.layers.indexOf(L) + 1, 0, N);
+    const copies = freshCopies(doc.strokes.filter((s) => s.layer === L.id), N.id);
+    doc.strokes.push(...copies);
+    doc.activeLayer = N.id;
+    setSelection([], null);
+    commit(); refreshPanel(); dirty = true;
+  },
+  layerMerge() {
+    const L = activeLayer(), i = doc.layers.indexOf(L);
+    if (i === 0) { flashHint('Nothing below to merge into — this is the bottom layer.'); return; }
+    const B = doc.layers[i - 1];
+    if (B.locked) { flashHint(`Layer “${B.name}” is locked — unlock it to merge into it.`); return; }
+    const styled = (L.blend || 'normal') !== 'normal' || L.opacity < 0.999 || !L.visible;
+    const up = doc.strokes.filter((s) => s.layer === L.id);
+    doc.strokes = doc.strokes.filter((s) => s.layer !== L.id).concat(up);   // stays above the lower layer's strokes
+    for (const s of up) s.layer = B.id;
+    doc.layers.splice(i, 1);
+    doc.activeLayer = B.id;
+    commit(); refreshPanel(); dirty = true;
+    flashHint(styled ? `Merged into “${B.name}” — the upper layer's opacity, blend mode or visibility didn't carry over.` : `Merged into “${B.name}”.`);
+  },
+  layerSolo() {
+    const L = activeLayer(), others = doc.layers.filter((x) => x !== L);
+    if (!others.length) return;
+    if (L.visible && others.every((x) => !x.visible)) for (const x of others) x.visible = true;
+    else { for (const x of others) { x.visible = false; dropFromSelection(x.id); } L.visible = true; }
+    commit(); dirty = true;
+  },
+  layerRename() {
+    const name = $('#layersList .layer.active .name');
+    if (name) name.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+  },
+  copy() {
+    const L = activeLayer();
+    const src = selection.length ? selection.slice() : doc.strokes.filter((s) => s.layer === L.id);
+    if (!src.length) { flashHint('Nothing to copy — select strokes, or copy a layer that has strokes.'); return false; }
+    const order = new Map(doc.strokes.map((s, i) => [s, i]));
+    src.sort((a, b) => order.get(a) - order.get(b));
+    const gids = new Set(src.map((s) => s.group).filter(Boolean));
+    clipboard = { strokes: clone(src), groups: clone(doc.groups.filter((g) => gids.has(g.id))) };
+    try { localStorage.setItem('recurror.clip', JSON.stringify(clipboard)); } catch { /* storage full or unavailable */ }
+    flashHint(`Copied ${src.length} stroke${src.length === 1 ? '' : 's'}${selection.length ? '' : ` (all of “${L.name}”)`} · Ctrl+V pastes into the active layer`);
+    return true;
+  },
+  cut() {
+    const L = activeLayer();
+    if (L.locked) { flashHint(`Layer “${L.name}” is locked.`); return; }
+    const had = selection.length;
+    if (!actions.copy()) return;
+    if (had) { actions.del(); return; }
+    doc.strokes = doc.strokes.filter((s) => s.layer !== L.id);
+    pruneGroups(); setSelection([], null); commit(); dirty = true;
+  },
+  paste() {
+    let clip = clipboard;
+    if (!clip) { try { clip = JSON.parse(localStorage.getItem('recurror.clip') || 'null'); } catch { clip = null; } }
+    if (!clip || !Array.isArray(clip.strokes) || !clip.strokes.length) { flashHint('Clipboard is empty — copy strokes or a layer first (Ctrl+C).'); return; }
+    if (!canDrawHere()) return;
+    const L = activeLayer();
+    const tmp = normaliseDoc({ format: 'recurror-doc', version: 2, width: doc.width, height: doc.height, layers: [{ id: L.id, name: L.name }], activeLayer: L.id, groups: clip.groups || [], strokes: clip.strokes });
+    const gmap = new Map();
+    for (const g of tmp.groups) { const n = Object.assign(clone(g), { id: newId('g') }); doc.groups.push(n); gmap.set(g.id, n.id); }
+    const copies = tmp.strokes.map((s) => Object.assign(s, { id: newId(), rev: nextRev(), layer: L.id, group: s.group ? gmap.get(s.group) || null : null }));
+    doc.strokes.push(...copies);
+    setSelection(copies, copies[copies.length - 1]);
+    commit(); dirty = true;
+    flashHint(`Pasted ${copies.length} stroke${copies.length === 1 ? '' : 's'} into “${L.name}”.`);
+  },
 };
+
+let clipboard = null;
+
+/** Copies of strokes for another layer: new ids, and their groups duplicated so the copies stay independent. */
+function freshCopies(src, layerId) {
+  const gmap = new Map();
+  for (const gid of new Set(src.map((s) => s.group).filter(Boolean))) {
+    const g = doc.groups.find((x) => x.id === gid);
+    if (!g) continue;
+    const n = Object.assign(clone(g), { id: newId('g') });
+    doc.groups.push(n); gmap.set(gid, n.id);
+  }
+  return src.map((s) => Object.assign(clone(s), { id: newId(), rev: nextRev(), layer: layerId, group: s.group ? gmap.get(s.group) || null : null }));
+}
+
+// ---------------------------------------------------------------------------
+// Paint bucket: flood-fill the rendered drawing, trace the region, store it as a vector fill
+// ---------------------------------------------------------------------------
+function bucketFill(w) {
+  if (!(w.x >= 0 && w.y >= 0 && w.x <= doc.width && w.y <= doc.height)) { flashHint('The bucket fills areas inside the artboard.'); return; }
+  const L = activeLayer();
+  const hit = hitTest(w.x, w.y, 0);
+  if (hit && hit.stroke.bucket) {
+    hit.stroke.fill.colA = ui.bucketCol; touch(hit.stroke); commit(); dirty = true;
+    return;
+  }
+  if (hit && hit.body && hit.stroke.style.mode !== 'none') {
+    const st = hit.stroke.style;
+    st.colA = st.colB = ui.bucketCol; touch(hit.stroke);
+    if (selection.includes(hit.stroke)) refreshPanel();
+    commit(); dirty = true;
+    return;
+  }
+  const S = Math.min(2, 2400 / Math.max(doc.width, doc.height));
+  const W = Math.max(8, Math.round(doc.width * S)), H = Math.max(8, Math.round(doc.height * S));
+  const kx = W / doc.width, ky = H / doc.height;
+  let px;
+  try { px = renderer.renderPixels(doc, W, H); } catch (err) { flashHint('Bucket failed: ' + err.message); return; }
+  const f = floodRegion(px, W, H, w.x * kx, w.y * ky, ui.bucketTol, ui.bucketGap * kx, 2);
+  if (!f || f.count < 4) { flashHint('Nothing to fill there.'); return; }
+  const poly = keyhole(traceRegion(f.mask, W, H, 0.8)).map((p) => ({ x: p.x / kx, y: p.y / ky }));
+  if (poly.length < 3) { flashHint('That area is too small to fill.'); return; }
+  const sym = clone(tpl.sym);
+  if (!ui.bucketSym) sym.mode = 'none';
+  const t = {
+    shape: { spline: 'linear', closed: true },
+    style: Object.assign(clone(tpl.style), { mode: 'none' }),
+    fill: Object.assign(clone(tpl.fill), { mode: 'flat', colA: ui.bucketCol, opacity: 1, lit: false }),
+    sym, rec: defaultRec(), warp: defaultWarp(),
+  };
+  const s = makeStroke(poly, t, L.id);
+  s.bucket = true;
+  // on a line's own body: colour the line itself (its shading and ink stay on top of the new colour);
+  // inside a shape's fill: a new fill just above that shape; in an empty area: under all the layer's lines
+  let at = -1;
+  if (hit && hit.stroke.layer === L.id) at = doc.strokes.indexOf(hit.stroke) + 1;
+  else if (ui.bucketUnder) at = doc.strokes.findIndex((x) => x.layer === L.id);
+  if (at >= 0 && at < doc.strokes.length) doc.strokes.splice(at, 0, s); else doc.strokes.push(s);
+  commit(); dirty = true;
+  if (f.touchesEdge) flashHint('Filled — the area reached the artboard edge. If it spilled through a gap, undo and raise Gap.');
+}
 
 function pruneGroups() { doc.groups = doc.groups.filter((g) => doc.strokes.some((s) => s.group === g.id)); }
 
@@ -1359,6 +1506,9 @@ function onKeyDown(e) {
     else if (k === 'a') { e.preventDefault(); actions.selectAll(); }
     else if (k === 'g') { e.preventDefault(); e.shiftKey ? actions.ungroup() : actions.group(); }
     else if (k === 'j') { e.preventDefault(); actions.join(); }
+    else if (k === 'c') { e.preventDefault(); actions.copy(); }
+    else if (k === 'x') { e.preventDefault(); actions.cut(); }
+    else if (k === 'v') { e.preventDefault(); actions.paste(); }
     return;
   }
   if (tag === 'SELECT') return;
@@ -1385,6 +1535,7 @@ function onKeyDown(e) {
       else if (k === 'w') setTool('width');
       else if (k === 'c') setTool('center');
       else if (k === 'h') setTool('pan');
+      else if (k === 'k') setTool('bucket');
       else if (k === 'f') fitView();
       else if (k === 'g') { ui.showGuides = !ui.showGuides; refreshPanel(); dirty = true; }
       else if (k === 's') { ui.snap = !ui.snap; if (!ui.snap) snapShow = null; refreshPanel(); dirty = true; }
@@ -1425,7 +1576,7 @@ function boot() {
   window.addEventListener('keyup', onKeyUp);
   window.addEventListener('blur', () => { spaceDown = false; updateCursorClass(); });
 
-  initPanelTabs($('#panel'));
+  panelTabs = initPanelTabs($('#panel'));
   new ResizeObserver(() => resize()).observe(stage);
   resize();
   fitView();
@@ -1441,7 +1592,7 @@ function boot() {
 
   // test / automation hook
   window.recurror = {
-    get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc,
+    get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc, bucketAt: (x, y) => bucketFill({ x, y }),
     get selection() { return selection; }, select: (ids) => setSelection(doc.strokes.filter((s) => ids.includes(s.id)), null),
     get stats() { return renderer && renderer.stats; },
     redraw: () => { dirty = true; draw(); },
