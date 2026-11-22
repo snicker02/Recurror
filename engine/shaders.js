@@ -891,6 +891,57 @@ void main() {
   gl_FragColor = vec4(co, s.a + d.a - s.a * d.a);
 }
 `;
+// ---- wet watercolour -------------------------------------------------------------------------
+// The layer's watercolour washes are rendered on their own, then spread: a wide blur says how far
+// the water carries pigment, an irregular threshold (noise + the paper) decides where the wet front
+// stops, pigment collects at that front as it dries (darker edges), and settles into the paper's
+// valleys (granulation). Washes that touch bleed into each other.
+export const wetBlurFS = PREC + `
+uniform sampler2D u_src;
+uniform vec2 u_step;          // one tap, in uv
+varying vec2 v_uv;
+void main() {
+  vec4 acc = vec4(0.0); float wsum = 0.0;
+  for (int i = -6; i <= 6; i++) {
+    float t = float(i) / 6.0;
+    float w = exp(-t * t * 3.0);
+    acc += texture2D(u_src, v_uv + u_step * float(i)) * w;
+    wsum += w;
+  }
+  gl_FragColor = acc / wsum;
+}
+`;
+export const wetFS = PREC + PAPER + `
+uniform sampler2D u_src;      // the washes as painted
+uniform sampler2D u_blur;     // the same, spread by the water
+uniform mat3 u_invView;
+uniform vec4 u_wet;           // edge darkening, bloom raggedness, granulation, spread (world units)
+varying vec2 v_uv;
+void main() {
+  vec4 s = texture2D(u_src, v_uv);
+  vec4 b = texture2D(u_blur, v_uv);
+  vec2 w = (u_invView * vec3(v_uv * 2.0 - 1.0, 1.0)).xy;
+  float sc = max(u_wet.w * 0.45, 1.0);
+  float n = 0.6 * pp_noise(w / sc) + 0.4 * pp_noise(w / (sc * 0.37) + 13.1);
+  float h = u_paper.x > 0.5 ? paperH(w) : 0.5;
+  // where the wet front stops: lower threshold = the water reaches further
+  float thr = 0.16 + 0.32 * u_wet.y * (n - 0.5) + 0.2 * u_wet.z * (0.5 - h);
+  float A = max(s.a, smoothstep(thr - 0.03, thr + 0.03, b.a));
+  if (A <= 0.002) { gl_FragColor = vec4(0.0); return; }
+  // pigment drifts to the front as the wash dries
+  float inner = smoothstep(thr + 0.04, thr + 0.3, b.a);
+  float edge = clamp(A - inner, 0.0, 1.0);
+  vec3 cb = b.a > 1e-3 ? b.rgb / b.a : vec3(0.0);
+  vec3 cs = s.a > 1e-3 ? s.rgb / s.a : cb;
+  vec3 c = mix(cb, cs, clamp(s.a * 0.25, 0.0, 1.0));
+  float dens = clamp(mix(b.a, s.a, 0.25), 0.0, 1.0);
+  c *= 1.0 - 0.18 * u_wet.x * edge;
+  c *= 1.0 - 0.35 * u_wet.z * (1.0 - h) * u_paper.z;
+  float a = clamp(0.16 + 0.6 * dens + 0.5 * u_wet.x * edge, 0.0, 0.92) * (0.88 + 0.28 * u_wet.z * (1.0 - h)) * A;
+  gl_FragColor = vec4(c * a, a);
+}
+`;
+
 export const blitFS = PREC + `
 uniform sampler2D u_src;
 varying vec2 v_uv;

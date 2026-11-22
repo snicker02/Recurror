@@ -13,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.11.0';
+export const VERSION = '2.12.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -96,7 +96,7 @@ const TOUCH_HINTS = {
 if (window.matchMedia && matchMedia('(pointer: coarse)').matches) Object.assign(HINTS, TOUCH_HINTS);
 
 // presets reset the brush-shape modifiers first, so switching looks never inherits a leftover nib or dash
-const SHAPE_RESET = { nibRatio: 1, jitter: 0, wobble: 0, dash: 'none', shadeEnds: 0, shadeEdge: 0, ink: 0, pool: 0, tooth: 0.5 };
+const SHAPE_RESET = { nibRatio: 1, jitter: 0, wobble: 0, dash: 'none', shadeEnds: 0, shadeEdge: 0, ink: 0, pool: 0, tooth: 0.5, spread: 0 };
 const PRESETS = {
   'Gilded tube': { mode: 'tube', colA: '#f2c46d', colB: '#c2410c', grad: 'along', width: 18, opacity: 1 },
   'Neon': { mode: 'neon', colA: '#22d3ee', colB: '#e879f9', grad: 'along', width: 22, glow: 1.2, taperStart: 0, taperEnd: 0, opacity: 1 },
@@ -113,7 +113,7 @@ const PRESETS = {
   'Rope': { mode: 'rope', colA: '#e9d5a1', colB: '#a16207', grad: 'none', width: 26, strands: 3, twist: 1.6, taperStart: 0, taperEnd: 0, opacity: 1 },
   'Pencil sketch': { mode: 'sketch', colA: '#d6d3d1', colB: '#d6d3d1', grad: 'none', width: 14, strands: 3, rough: 0.6, wobble: 0.25, wobbleScale: 160, taperStart: 0.1, taperEnd: 0.2, opacity: 0.9 },
   'Dry brush': { mode: 'drybrush', colA: '#f97316', colB: '#7c2d12', grad: 'along', width: 40, rough: 0.6, pressure: 0.5, taperStart: 0.05, taperEnd: 0.3, opacity: 1 },
-  'Watercolour': { mode: 'watercolor', colA: '#60a5fa', colB: '#a78bfa', grad: 'along', width: 46, rough: 0.6, jitter: 0.3, jitterScale: 90, taperStart: 0.1, taperEnd: 0.2, opacity: 0.9 },
+  'Watercolour': { mode: 'watercolor', colA: '#60a5fa', colB: '#a78bfa', grad: 'along', width: 46, rough: 0.6, jitter: 0.3, jitterScale: 90, taperStart: 0.1, taperEnd: 0.2, opacity: 0.9 , spread: 26, wetEdge: 0.6, bloom: 0.55, granulate: 0.5, tooth: 0.5},
   'Pearls': { mode: 'tube', colA: '#f8fafc', colB: '#cbd5e1', grad: 'none', width: 20, dash: 'dot', dashGap: 26, taperStart: 0, taperEnd: 0, pressure: 0, opacity: 1 },
   'Dotted line': { mode: 'flat', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 7, dash: 'dot', dashGap: 14, taperStart: 0, taperEnd: 0, pressure: 0, opacity: 1 },
   'Dashed line': { mode: 'flat', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 6, dash: 'dash', dashLen: 26, dashGap: 14, taperStart: 0, taperEnd: 0, pressure: 0, cap: 'butt', opacity: 1 },
@@ -133,6 +133,7 @@ const PRESETS = {
   'Soft pastel': { mode: 'stamp', colA: '#f472b6', colB: '#f472b6', grad: 'none', width: 30, pressure: 0.5, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'chalk', stampSpacing: 0.1, stampScatter: 0.2, stampRot: 1, stampSizeJit: 0.3, stampFlow: 0.45, tooth: 0.6, overlap: 'blend', opacity: 1 },
   'Spray paint': { mode: 'stamp', colA: '#22c55e', colB: '#22c55e', grad: 'none', width: 40, pressure: 0.3, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'splatter', stampSpacing: 0.18, stampScatter: 0.9, stampRot: 1, stampSizeJit: 0.6, stampFlow: 0.8, tooth: 0.2, overlap: 'blend', opacity: 1 },
   'Sponge': { mode: 'stamp', colA: '#a855f7', colB: '#a855f7', grad: 'none', width: 48, pressure: 0.2, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'sponge', stampSpacing: 0.55, stampScatter: 0.25, stampRot: 1, stampSizeJit: 0.3, stampFlow: 0.75, tooth: 0.4, overlap: 'blend', opacity: 1 },
+  'Wet wash': { mode: 'watercolor', colA: '#2b6cb0', colB: '#7fb3e0', grad: 'along', width: 46, pressure: 0.4, taperStart: 0.05, taperEnd: 0.1, cap: 'round', rough: 0.4, spread: 48, wetEdge: 0.75, bloom: 0.7, granulate: 0.6, tooth: 0.5, opacity: 0.8 },
   'Cross stitch': { mode: 'stitch', colA: '#fca5a5', colB: '#b91c1c', grad: 'none', width: 18, stitchSpacing: 12, stitchSlant: 0.9, taperStart: 0, taperEnd: 0, opacity: 1 },
 };
 

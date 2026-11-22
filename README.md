@@ -119,6 +119,8 @@ New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour
 
 **Ink pooling** (Brush section): more ink where the pen slowed down (the drawing speed is recorded with each freehand stroke), on sharp turns and along the edges, plus a round blot where the pen lands and lifts. Presets: Fineliner, Fountain pen, Ink brush pen.
 
+**Wet watercolour**: give a Watercolour stroke a **Wet spread** (drawing units) and its wash is painted wet. The layer's wet washes are rendered on their own and spread: the water carries the pigment outward to an irregular wet front shaped by noise and the paper (**Blooms**), pigment gathers at that front as it dries (**Edge darkening**) and settles into the paper's valleys (**Granulation**). Washes in the same layer bleed into each other where they meet, and they sit under the layer's other strokes, so ink lines stay crisp. The spread is measured in drawing units, so it looks the same at any zoom and in exports. Preset: Wet wash; the Watercolour preset is now wet too. Set Wet spread to 0 for the fixed watercolour look.
+
 **Bristle brush** (shading mode): the stroke is drawn as separate hairs (**Hairs** 4–48). Each hair carries its own load of paint and runs dry at its own point (**Dryness**), the hairs part on turns (**Hair spread**), and colours blend from A to B across the brush (**Colour blend**). Presets: Oil bristle, Gouache.
 
 **Stamp brush** (shading mode): a tip stamped along the path with **Spacing**, **Scatter**, **Rotation jitter**, **Size jitter** and **Flow**. Tips: round (soft), flat, chalk, sponge, splatter, or a picture you load (its dark or opaque parts paint; it's saved inside the document). Presets: Charcoal, Soft pastel, Spray paint, Sponge.
@@ -215,6 +217,8 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.12.0**: Wet watercolour: washes spread, gather pigment at the wet edge, granulate and bleed into each other (per layer, under its other strokes).
 
 - **2.11.0**: Realistic media: shared paper texture (cold press, hot press, sketch, canvas), ink pooling from recorded drawing speed, bristle brush, stamp brush with picture tips, and nine new presets.
 

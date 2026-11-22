@@ -1,6 +1,6 @@
 // Recurror — WebGL1 renderer: layers → offscreen accumulation → screen / export.
 import {
-  strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS, paperVS, paperFS,
+  strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS, paperVS, paperFS, wetBlurFS, wetFS,
   STROKE_MODES, ADDITIVE_MODES, SOFT_MODES, DASH_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
 } from './shaders.js';
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
@@ -74,6 +74,17 @@ function paperUniform(doc) {
   return [PAPER_TYPES[doc.paperType] || 0, Math.max(0.5, +doc.paperScale || 6), Math.max(0, Math.min(1, +(doc.paperStrength ?? 0.6)))];
 }
 
+/** Inverse of an affine view matrix (column-major 3×3). */
+function invView(m) {
+  const a = m[0], b = m[1], c = m[3], d = m[4], tx = m[6], ty = m[7];
+  const det = a * d - b * c;
+  const ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+  return new Float32Array([ia, ib, 0, ic, id, 0, -(ia * tx + ic * ty), -(ib * tx + id * ty), 1]);
+}
+
+/** A watercolour stroke whose wash spreads (painted wet, then simulated). */
+const isWet = (s) => s.style.mode === 'watercolor' && (+s.style.spread || 0) > 0;
+
 // ?noinst in the page URL forces the per-copy fallback path (used by the tests)
 function o_noInstancing() { try { return /[?&]noinst\b/.test(location.search); } catch { return false; } }
 
@@ -90,6 +101,8 @@ export class Renderer {
     this.progComp = program(gl, quadVS, compFS);
     this.progBlit = program(gl, quadVS, blitFS);
     this.progPaper = program(gl, paperVS, paperFS);
+    this.progWetBlur = program(gl, quadVS, wetBlurFS);
+    this.progWet = program(gl, quadVS, wetFS);
     // 1×1 placeholder bound when a stamp brush has no picture tip
     this.blankTip = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.blankTip);
@@ -136,7 +149,7 @@ export class Renderer {
     const ds = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, ds);
     gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_STENCIL, w, h);
-    return { w, h, ds, A: this.makeTarget(w, h, ds), B: null, L: null };
+    return { w, h, ds, A: this.makeTarget(w, h, ds), B: null, L: null, W1: null, W2: null, W3: null };
   }
 
   ensureExtra(T) {
@@ -144,10 +157,14 @@ export class Renderer {
     if (!T.L) T.L = this.makeTarget(T.w, T.h, T.ds);
   }
 
+  ensureWet(T) {
+    for (const k of ['W1', 'W2', 'W3']) if (!T[k]) T[k] = this.makeTarget(T.w, T.h, T.ds);
+  }
+
   freeTargets(T) {
     if (!T) return;
     const gl = this.gl;
-    for (const k of ['A', 'B', 'L']) if (T[k]) { gl.deleteFramebuffer(T[k].fbo); gl.deleteTexture(T[k].tex); }
+    for (const k of ['A', 'B', 'L', 'W1', 'W2', 'W3']) if (T[k]) { gl.deleteFramebuffer(T[k].fbo); gl.deleteTexture(T[k].tex); }
     gl.deleteRenderbuffer(T.ds);
   }
 
@@ -280,10 +297,15 @@ export class Renderer {
       for (const e of extra) if (e.layer === layer.id) list.push(e.stroke);
       if (!list.length) continue;
       const direct = (layer.blend || 'normal') === 'normal' && layer.opacity >= 0.999;
+      // wet watercolour washes are painted and spread first, under the layer's other strokes
+      const wet = list.filter(isWet);
+      const dry = wet.length ? list.filter((s) => !isWet(s)) : list;
+      const wetTex = wet.length ? this.paintWet(doc, wet, o, T, scissor) : null;
       if (direct) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.A.fbo);
         scissor();
-        for (const s of list) this.drawStroke(doc, s, o);
+        if (wetTex) this.blitOver(wetTex);
+        for (const s of dry) this.drawStroke(doc, s, o);
       } else {
         this.ensureExtra(T);
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.L.fbo);
@@ -291,7 +313,8 @@ export class Renderer {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
         scissor();
-        for (const s of list) this.drawStroke(doc, s, o);
+        if (wetTex) this.blitOver(wetTex);
+        for (const s of dry) this.drawStroke(doc, s, o);
         // composite L over A → B, then swap
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.B.fbo);
         scissor();
@@ -406,14 +429,82 @@ export class Renderer {
     return D;
   }
 
+  /** Paint a layer's wet washes into W1 and spread them (W1 → blur W2 → W3 → result W2). */
+  paintWet(doc, wet, o, T, scissor) {
+    const gl = this.gl;
+    this.ensureWet(T);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W1.fbo);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    scissor();
+    for (const s of wet) this.drawStroke(doc, s, o);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
+    let spread = 0, edge = 0, bloom = 0, gran = 0;
+    for (const s of wet) {
+      spread = Math.max(spread, +s.style.spread || 0);
+      edge = Math.max(edge, +(s.style.wetEdge ?? 0.6));
+      bloom = Math.max(bloom, +(s.style.bloom ?? 0.5));
+      gran = Math.max(gran, +(s.style.granulate ?? 0.5));
+    }
+    const R = Math.max(1, spread / o.pxWorld);                 // the spread in pixels at this zoom
+    const quad = (P) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+      this.setAttribs([P.att.a_pos]);
+      gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    };
+    const PB = this.progWetBlur;
+    gl.useProgram(PB.p);
+    gl.uniform1i(PB.uni.u_src, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W2.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, T.W1.tex);
+    gl.uniform2f(PB.uni.u_step, R / 6 / T.w, 0);
+    quad(PB);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W3.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, T.W2.tex);
+    gl.uniform2f(PB.uni.u_step, 0, R / 6 / T.h);
+    quad(PB);
+    const P = this.progWet;
+    gl.useProgram(P.p);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W2.fbo);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, T.W1.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, T.W3.tex);
+    gl.uniform1i(P.uni.u_src, 0); gl.uniform1i(P.uni.u_blur, 1);
+    gl.uniformMatrix3fv(P.uni.u_invView, false, invView(o.viewMat));
+    const pu = this.paperU || [0, 6, 0.6];
+    gl.uniform3f(P.uni.u_paper, pu[0], pu[1], pu[2]);
+    gl.uniform4f(P.uni.u_wet, edge, bloom, gran, spread);
+    quad(P);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.enable(gl.BLEND);
+    return T.W2.tex;
+  }
+
+  /** Draw a premultiplied texture over the bound target. */
+  blitOver(tex) {
+    const gl = this.gl, P = this.progBlit;
+    gl.useProgram(P.p);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(P.uni.u_src, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    this.setAttribs([P.att.a_pos]);
+    gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
   /** Multiply the paper's relief onto the background (artboard only). */
   drawPaper(o, scissor) {
-    const gl = this.gl, P = this.progPaper, m = o.viewMat;
-    // inverse of the affine view matrix (column-major 3×3)
-    const a = m[0], b = m[1], c = m[3], d = m[4], tx = m[6], ty = m[7];
-    const det = a * d - b * c;
-    const ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
-    const inv = new Float32Array([ia, ib, 0, ic, id, 0, -(ia * tx + ic * ty), -(ib * tx + id * ty), 1]);
+    const gl = this.gl, P = this.progPaper;
+    const inv = invView(o.viewMat);
     gl.useProgram(P.p);
     gl.uniformMatrix3fv(P.uni.u_invView, false, inv);
     gl.uniform3f(P.uni.u_paper, this.paperU[0], this.paperU[1], this.paperU[2]);

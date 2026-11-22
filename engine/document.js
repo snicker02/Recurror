@@ -26,6 +26,7 @@ export function defaultStyle() {
     ink: 0, inkCol: '#000000',
     // realistic media: ink pooling, paper tooth, bristle brush, stamp brush
     pool: 0, tooth: 0.5,
+    spread: 0, wetEdge: 0.6, bloom: 0.5, granulate: 0.5,      // wet watercolour (spread 0 = dry, fixed look)
     hairs: 18, dryness: 0.45, hairSpread: 0.5, hairBlend: 0.6,
     stampTip: 'round', stampImg: null, stampSpacing: 0.25, stampScatter: 0.3, stampRot: 0.5, stampSizeJit: 0.3, stampFlow: 0.6,
   };
