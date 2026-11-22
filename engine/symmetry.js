@@ -564,7 +564,7 @@ export const CROP_SITES = 16;
  * @param pts local points of the stroke (samples or control points)
  * @returns {{c:[number,number], w0:number, sites:Float32Array, n:number} | null}
  */
-export function cropDomain(sym, pts, w, h) {
+export function cropDomain(sym, pts, w, h, anchor = null) {
   if (!sym || !sym.crop || !CROP_MODES.has(sym.mode) || !pts || !pts.length) return null;
   const base = symTransforms(sym, w, h);
   if (base.length < 2) return null;
@@ -580,7 +580,9 @@ export function cropDomain(sym, pts, w, h) {
     return true;
   };
   let c = null;
-  // start a little way along the stroke, so a stroke begun exactly on a wall, corner or centre
+  // an explicit anchor (a bucket fill's click point) picks the cell when it's usable
+  if (anchor && Number.isFinite(anchor.x) && generic(anchor.x, anchor.y)) c = { x: anchor.x, y: anchor.y };
+  // otherwise start a little way along the stroke, so a stroke begun exactly on a wall, corner or centre
   // belongs to the cell it heads into
   let i0 = 0;
   while (i0 < pts.length - 1 && Math.hypot(pts[i0].x - pts[0].x, pts[i0].y - pts[0].y) < 1.5) i0++;

@@ -97,6 +97,7 @@ export function normaliseDoc(raw) {
       rec: Object.assign(defaultRec(), s.rec || {}),
       warp: Object.assign(defaultWarp(), s.warp || {}),
       ...(s.bucket ? { bucket: true } : {}),
+      ...(s.cropAt && Number.isFinite(+s.cropAt.x) && Number.isFinite(+s.cropAt.y) ? { cropAt: { x: +s.cropAt.x, y: +s.cropAt.y } } : {}),
     });
   }
   const seen = new Set();
@@ -124,6 +125,7 @@ export function serialise(doc) {
       points: s.points.map((p) => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2), p: +p.p.toFixed(3), w: +(p.w ?? 1).toFixed(3) })),
       shape: s.shape, style: s.style, fill: s.fill, sym: s.sym, rec: s.rec, warp: s.warp,
       ...(s.bucket ? { bucket: true } : {}),
+      ...(s.cropAt ? { cropAt: s.cropAt } : {}),
     })),
   });
 }
