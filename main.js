@@ -13,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.8.1';
+export const VERSION = '2.8.2';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -1390,15 +1390,29 @@ function bucketFill(w) {
   try { px = renderer.renderPixels(doc, W, H); } catch (err) { flashHint('Bucket failed: ' + err.message); return; }
   const f = floodRegion(px, W, H, w.x * kx, w.y * ky, ui.bucketTol, ui.bucketGap * kx, 2);
   if (!f || f.count < 4) { flashHint('Nothing to fill there.'); return; }
-  const poly = keyhole(traceRegion(f.mask, W, H, 0.8)).map((p) => ({ x: p.x / kx, y: p.y / ky }));
+  let poly = keyhole(traceRegion(f.mask, W, H, 0.8)).map((p) => ({ x: p.x / kx, y: p.y / ky }));
   if (poly.length < 3) { flashHint('That area is too small to fill.'); return; }
   const sym = clone(tpl.sym);
   if (!ui.bucketSym) sym.mode = 'none';
+  // The region was found in the warped picture. Store it in pre-warp coordinates and give the fill
+  // the same warp, so it lands back on the region and its symmetric copies are warped like the lines.
+  const warp = warpActive(tpl.warp) ? clone(tpl.warp) : defaultWarp();
+  if (warpActive(warp)) {
+    let guess;
+    const cx = +sym.cx, cy = +sym.cy;
+    const err = (l, p) => { const f = warpPoint(warp, cx, cy, l.x, l.y); return Math.hypot(f.x - p.x, f.y - p.y); };
+    poly = poly.map((p) => {
+      let l = unwarp(warp, sym, p.x, p.y, guess);
+      if (err(l, p) > 0.05) { const l2 = unwarp(warp, sym, p.x, p.y); if (err(l2, p) < err(l, p)) l = l2; }
+      guess = l;
+      return { x: l.x, y: l.y };
+    });
+  }
   const t = {
     shape: { spline: 'linear', closed: true },
     style: Object.assign(clone(tpl.style), { mode: 'none' }),
     fill: Object.assign(clone(tpl.fill), { mode: 'flat', colA: ui.bucketCol, opacity: 1, lit: false }),
-    sym, rec: defaultRec(), warp: defaultWarp(),
+    sym, rec: defaultRec(), warp,
   };
   const s = makeStroke(poly, t, L.id);
   s.bucket = true;
