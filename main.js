@@ -7,13 +7,13 @@ import {
   newDocument, makeStroke, touch, normaliseDoc, serialise, History,
   defaultStyle, defaultFill, defaultShape, defaultLayer, nextRev, newId, syncGroup,
 } from './engine/document.js';
-import { defaultSym, defaultRec, allTransformsCached, mobInverse, mobApply, mobScaleAt, hyperbolicValid, copyLimit } from './engine/symmetry.js';
+import { defaultSym, defaultRec, allTransformsCached, transformsFor, mobInverse, mobApply, mobScaleAt, hyperbolicValid, copyLimit, cropDomain, cropKeeps, symKey } from './engine/symmetry.js';
 import { defaultWarp, warpActive, warpInverse, warpPoint, WARPS, WARP_LABELS } from './engine/warp.js';
 import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js';
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.8.3';
+export const VERSION = '2.8.4';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -558,11 +558,23 @@ function bound(s) {
 }
 
 /** Hit test across every copy of every editable stroke, topmost first. */
+const cropMemo = new Map();
+function cropOf(s) {
+  const key = s.rev + '|' + symKey(s.sym, doc.width, doc.height) + '|' + s.sym.hR;
+  const hit = cropMemo.get(s.id);
+  if (hit && hit.key === key) return hit.D;
+  const D = cropDomain(s.sym, getSamples(s), doc.width, doc.height);
+  if (cropMemo.size > 2000) cropMemo.clear();
+  cropMemo.set(s.id, { key, D });
+  return D;
+}
+
 function hitTest(wx, wy, slopPx = 5) {
   const slop = slopPx / view.zoom;
   for (const s of strokesTopFirst()) {
     if (!editable(s)) continue;
-    const xs = allTransformsCached(s.sym, s.rec, doc.width, doc.height);
+    const crop = s.sym.crop ? cropOf(s) : null;     // parts cut away by Crop to cell aren't there to hit
+    const xs = transformsFor(s.sym, s.rec, doc.width, doc.height, crop ? { x: crop.c[0], y: crop.c[1] } : bound(s));
     const inv = inverses(xs);
     let pre = { x: wx, y: wy }, ws = 1;
     if (warpActive(s.warp)) {
@@ -580,6 +592,7 @@ function hitTest(wx, wy, slopPx = 5) {
     const sm = getSamples(s);
     for (let k = 0; k < xs.length; k++) {
       const l = mobApply(inv[k], pre.x, pre.y);
+      if (crop && !cropKeeps(crop, l.x, l.y)) continue;
       const sc = mobScaleAt(xs[k].mob, l.x, l.y) * ws;
       if (!(sc > 1e-9)) continue;
       const tol = hwLocal + slop / sc;
@@ -1394,6 +1407,9 @@ function bucketFill(w) {
   if (poly.length < 3) { flashHint('That area is too small to fill.'); return; }
   const sym = clone(tpl.sym);
   if (!ui.bucketSym) sym.mode = 'none';
+  // the traced area is exact already: cropping it to one cell would keep only the piece inside
+  // that cell, so its copies would fill only parts of the matching areas
+  sym.crop = false;
   // The region was found in the warped picture. Store it in pre-warp coordinates and give the fill
   // the same warp, so it lands back on the region and its symmetric copies are warped like the lines.
   const warp = warpActive(tpl.warp) ? clone(tpl.warp) : defaultWarp();

@@ -123,6 +123,7 @@ export function serialise(doc) {
       id: s.id, layer: s.layer, group: s.group || null,
       points: s.points.map((p) => ({ x: +p.x.toFixed(2), y: +p.y.toFixed(2), p: +p.p.toFixed(3), w: +(p.w ?? 1).toFixed(3) })),
       shape: s.shape, style: s.style, fill: s.fill, sym: s.sym, rec: s.rec, warp: s.warp,
+      ...(s.bucket ? { bucket: true } : {}),
     })),
   });
 }

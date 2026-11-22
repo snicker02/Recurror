@@ -197,6 +197,12 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.8.4**: Paint bucket with **Crop to cell** fixed.
+  - Clicking a gap left by a cropped fill used to recolour that fill (its cut-away part still counted as "under" the click), so the gap couldn't be filled. Clicks now only hit what's actually drawn.
+  - Bucket fills are never cropped themselves: the traced area is exact already, and cropping it kept only a piece of each matching area.
+  - Bucket fills now keep their bucket marker through save, load and undo.
+  - Wallpaper copies are placed around each stroke (or its crop cell) instead of around the lattice origin, so strokes and fills far from the centre no longer leave gaps at the opposite edges of the artboard.
+
 - **2.8.3**: Wallpaper **Crop to cell** now cuts every group to a guide-aligned asymmetric unit (lattice lines, mirrors and lines through rotation centres), instead of slanted bisectors that depended on where the stroke started. Checked that all 17 groups tile exactly.
 
 - **2.8.2**: Paint bucket with a warp active: fills are stored before the warp and carry it, so the filled area and its symmetric copies land on the right areas of the warped drawing (they used to spill outside the lines).
