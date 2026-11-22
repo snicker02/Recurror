@@ -195,6 +195,8 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.7.1**: Weave fix: at shallow crossings the lower strand's edge (and ink line) no longer pokes through the upper strand. Each crossing now holds its over/under height across the whole overlap, which gets longer the shallower the crossing, and a strand that goes over one neighbour and straight under the next ramps between them instead of switching abruptly.
+
 - **2.7.0**: Zentangle tools.
   - Ink outline and graphite shading (end shading, edge shading, grain) for any brush, with Tangle strand / Tangle tube / Inked colour band presets.
   - Paint bucket tool (K): fills closed areas as vector fills under the lines, with gap closing and symmetric copies; clicking a line recolours it.

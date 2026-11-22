@@ -80,8 +80,16 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
   const stamp = new Int32Array(segN).fill(-1);
   let stampId = 0;
 
-  const pairs = [];                    // [sA, sB]
-  const scan = (P, self) => {
+  const pairs = [];                    // [sA, sB, half-overlap at A, half-overlap at B]
+  // Two strands crossing at angle θ overlap over a diamond whose half-length along a strand is
+  // (other half width + own half width·|cos θ|) / sin θ — long at shallow crossings. The height
+  // must hold its value over all of it, or the lower strand pokes through at the diamond's tips.
+  const reach = (hwOther, hwOwn, cos) => {
+    const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
+    const L = (hwOther + hwOwn * cos) / Math.max(sin, 0.12) + 0.5 * hwOwn;
+    return Math.max(1.5 * hwOwn, Math.min(L, 12 * hwOwn));
+  };
+  const scan = (P, self, sc = 1) => {
     for (let k = 0; k < segN; k++) {
       const a = P[k], b = P[(k + 1) % n];
       if (!Number.isFinite(a.x) || !Number.isFinite(b.x)) continue;
@@ -104,7 +112,9 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
           if (!r) continue;
           const sa = cum[i] + r[0] * (cum[i + 1] - cum[i]);
           const sb = cum[k] + r[1] * (cum[k + 1] - cum[k]);
-          pairs.push([sa, sb]);
+          const ux = s1.x - s0.x, uy = s1.y - s0.y, vx = b.x - a.x, vy = b.y - a.y;
+          const cos = Math.min(1, Math.abs(ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1));
+          pairs.push([sa, sb, reach(maxHw * sc, maxHw, cos), reach(maxHw / sc, maxHw, cos)]);
         }
       }
     }
@@ -119,23 +129,23 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
     if (Math.hypot(c.x - cx, c.y - cy) > R0 + rj + 2 * maxHw) continue;
     tested++;
     const P = samples.map((p) => mobApply(m, p.x, p.y));
-    scan(P, false);
+    scan(P, false, Math.max(1e-3, mobScaleAt(m, cx, cy)));
   }
   if (!pairs.length) return { ...empty, plateau: Math.max(2 * maxHw, 3) };
 
   // cluster arc-length positions into nodes
   const tol = Math.max(0.25, maxHw * 0.15);
   const all = [];
-  pairs.forEach(([a, b], i) => { all.push([a, i, 0], [b, i, 1]); });
+  pairs.forEach(([a, b, ra, rb], i) => { all.push([a, i, 0, ra], [b, i, 1, rb]); });
   all.sort((p, q) => p[0] - q[0]);
   const nodeOf = new Int32Array(all.length);
-  const nodeS = [];
+  const nodeS = [], nodeR = [];
   const ends = new Array(pairs.length).fill(null).map(() => [0, 0]);
-  let cur = -1, last = -Infinity, sum = 0, cnt = 0;
-  const flush = () => { if (cur >= 0) nodeS[cur] = sum / cnt; };
-  for (const [s, pi, side] of all) {
-    if (s - last > tol) { flush(); cur++; sum = 0; cnt = 0; }
-    sum += s; cnt++; last = s;
+  let cur = -1, last = -Infinity, sum = 0, cnt = 0, rmax = 0;
+  const flush = () => { if (cur >= 0) { nodeS[cur] = sum / cnt; nodeR[cur] = rmax; } };
+  for (const [s, pi, side, rr] of all) {
+    if (s - last > tol) { flush(); cur++; sum = 0; cnt = 0; rmax = 0; }
+    sum += s; cnt++; last = s; rmax = Math.max(rmax, rr);
     ends[pi][side] = cur;
   }
   flush();
@@ -148,7 +158,7 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
   for (let i = 0; i + 1 < N; i++) alt(i, i + 1);
   if (closed && N > 2) alt(N - 1, 0);
 
-  const nodes = nodeS.map((s, i) => ({ s, h: (dsu.find(i)[1] ? -1 : 1) * (flip ? -1 : 1) }));
+  const nodes = nodeS.map((s, i) => ({ s, h: (dsu.find(i)[1] ? -1 : 1) * (flip ? -1 : 1), r: Math.max(3, nodeR[i]) }));
   const plateau = Math.max(2 * maxHw, 3);
   const heightAt = (s) => {
     // nearest nodes left / right
@@ -157,9 +167,19 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
     if (s >= nodes[N - 1].s) return nodes[N - 1].h;
     while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (nodes[mid].s <= s) lo = mid; else hi = mid; }
     const L = nodes[lo], Rn = nodes[hi];
-    const dl = s - L.s, dr = Rn.s - s;
-    if (dl <= plateau || dr <= plateau) return dl <= dr ? L.h : Rn.h;
-    const t = (s - L.s - plateau) / Math.max(1e-6, Rn.s - L.s - 2 * plateau);
+    if (L.h === Rn.h) return L.h;
+    const dl = s - L.s, dr = Rn.s - s, gap = Rn.s - L.s;
+    let t;
+    if (L.r + Rn.r < gap) {
+      // each crossing holds its height over its whole overlap, ramping in between
+      if (dl <= L.r) return L.h;
+      if (dr <= Rn.r) return Rn.h;
+      t = (dl - L.r) / (gap - L.r - Rn.r);
+    } else {
+      // overlaps run into each other: a ramp from crossing to crossing instead of a hard step, so
+      // a strand passing from over one neighbour to under the next stays between their heights
+      t = dl / Math.max(1e-6, gap);
+    }
     return L.h + (Rn.h - L.h) * Math.max(0, Math.min(1, t));
   };
   return { nodes, plateau, crossings, alternations, alternationsKept: kept, total, heightAt };
