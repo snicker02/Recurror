@@ -102,6 +102,7 @@
           <option value="inversion">Circle inversion</option>
         </select></div>
       <div class="row" data-show="sym.mode=rotate|kaleido|spiral"><label>Folds</label><input type="range" min="2" max="48" step="1" data-bind="sym.n"><output></output></div>
+      <div class="row" data-show="sym.mode=mirror|rotate|kaleido|wallpaper|hyperbolic"><label title="Cut each copy at the symmetry boundaries, so copies never overlap. The stroke keeps the part inside the cell where it starts.">Crop to cell</label><input type="checkbox" data-bind="sym.crop"></div>
       <div class="row" data-show="sym.mode=mirror|rotate|kaleido|spiral|hyperbolic|inversion"><label>Angle</label><input type="range" min="0" max="360" step="0.5" data-bind="sym.angle"><output></output></div>
       <div class="row" data-show="sym.mode=spiral"><label>Ratio</label><input type="range" min="0.5" max="1.15" step="0.005" data-bind="sym.ratio"><output></output></div>
       <div class="row" data-show="sym.mode=spiral"><label>Steps</label><input type="range" min="2" max="300" step="1" data-bind="sym.steps"><output></output></div>
