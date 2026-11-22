@@ -66,6 +66,7 @@ varying float v_pad;
 varying vec2 v_along;
 varying vec2 v_T;
 varying vec2 v_N;
+varying vec2 v_cl;            // local (pre-copy) position, for crop-to-cell
 
 void main() {
   vec2 w0 = mobP(a_pos);
@@ -79,6 +80,7 @@ void main() {
   float zv = u_weaveOn > 0.5 ? (-0.9 * a_weave + 0.05 * (1.0 - 2.0 * a_along.x)) : (1.0 - 2.0 * a_along.x);
   gl_Position = vec4(c.xy, u_softZ > 0.5 ? 0.999 - 1.998 * i_idx : u_zOff + u_zScale * zv, 1.0);
   v_dc = a_vc * e;
+  v_cl = a_pos + a_ext * e;
   v_hw = a_hw;
   v_pad = pad;
   v_along = a_along;
@@ -128,6 +130,23 @@ varying float v_pad;
 varying vec2 v_along;
 varying vec2 v_T;
 varying vec2 v_N;
+varying vec2 v_cl;
+
+uniform float u_clipN;      // crop to cell: number of neighbouring sites (0 = off)
+uniform vec2 u_clipC;       // the cell's own site
+uniform float u_clipW0;     // its distance weight (1, or the hyperbolic factor)
+uniform vec3 u_clipP[16];   // neighbouring sites (x, y, weight)
+bool cropped(vec2 l) {
+  if (u_clipN < 0.5) return false;
+  vec2 d = l - u_clipC;
+  float d0 = dot(d, d) * u_clipW0;
+  for (int j = 0; j < 16; j++) {
+    if (float(j) >= u_clipN) break;
+    vec2 e = l - u_clipP[j].xy;
+    if (dot(e, e) * u_clipP[j].z < d0) return true;
+  }
+  return false;
+}
 
 vec3 shade(vec3 base, vec3 n) {
   float lam = max(dot(n, u_light), 0.0);
@@ -161,6 +180,7 @@ float gradT(vec2 q, float rn) {
 }
 
 void main() {
+  if (cropped(v_cl)) discard;
   float hw = max(v_hw, 1e-4);
   float aa = max(v_pad, 1e-5);
   float r = length(v_dc);
@@ -412,6 +432,22 @@ varying float v_pxl;
 varying vec2 v_l0;
 varying vec2 v_l1;
 
+uniform float u_clipN;      // crop to cell: number of neighbouring sites (0 = off)
+uniform vec2 u_clipC;       // the cell's own site
+uniform float u_clipW0;     // its distance weight (1, or the hyperbolic factor)
+uniform vec3 u_clipP[16];   // neighbouring sites (x, y, weight)
+bool cropped(vec2 l) {
+  if (u_clipN < 0.5) return false;
+  vec2 d = l - u_clipC;
+  float d0 = dot(d, d) * u_clipW0;
+  for (int j = 0; j < 16; j++) {
+    if (float(j) >= u_clipN) break;
+    vec2 e = l - u_clipP[j].xy;
+    if (dot(e, e) * u_clipP[j].z < d0) return true;
+  }
+  return false;
+}
+
 float hash(vec2 p) { p = fract(p * vec2(0.1031, 0.1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
 vec2 hash2(vec2 p) { return vec2(hash(p), hash(p + 19.19)); }
 float vnoise(vec2 p) {
@@ -430,6 +466,7 @@ float lineInk(float y, float px) {           // y in repeat units, px = repeat u
 }
 
 void main() {
+  if (cropped(v_local)) discard;
   int mode = int(u_fmode + 0.5);
   vec3 col = u_colA;
   vec2 d = v_local - u_center;

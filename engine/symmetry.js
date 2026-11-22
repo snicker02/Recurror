@@ -111,6 +111,8 @@ export function defaultSym(w = 2048, h = 2048) {
     hp: 7, hq: 3, hR: Math.min(w, h) * 0.46, hRefl: true, hDepth: 40,
     // circle inversion
     invK: 4, invD: Math.min(w, h) * 0.26, invR: Math.min(w, h) * 0.16, invHub: 0, invDepth: 3, invRing: true,
+    // crop each copy to its own cell of the symmetry (no overlap across the boundaries)
+    crop: false,
   };
 }
 
@@ -516,4 +518,66 @@ export function allTransformsCached(sym, rec, w, h) {
     allCache.set(k, v);
   }
   return v;
+}
+
+// ---- crop to cell -----------------------------------------------------------------------------
+export const CROP_MODES = new Set(['mirror', 'rotate', 'kaleido', 'wallpaper', 'hyperbolic']);
+export const CROP_SITES = 16;
+
+/**
+ * Cell of the identity copy, as a Dirichlet domain: the points nearer to a site c than to any
+ * image g(c). For a group of isometries the images of that cell tile the plane (or the hyperbolic
+ * disk) without overlap, and its walls fall on the mirrors. Distances are Euclidean, or hyperbolic
+ * for {p,q} — where comparing |x−c|²/(R²−|c−O|²) is exact, since the x term cancels.
+ * c is where the stroke starts (moved off any mirror or rotation centre), so a stroke is kept in the
+ * cell it was started in. For plain rotations c is turned to the middle of its guide wedge, so the
+ * cut falls on the guide rays.
+ * @param pts local points of the stroke (samples or control points)
+ * @returns {{c:[number,number], w0:number, sites:Float32Array, n:number} | null}
+ */
+export function cropDomain(sym, pts, w, h) {
+  if (!sym || !sym.crop || !CROP_MODES.has(sym.mode) || !pts || !pts.length) return null;
+  const base = symTransforms(sym, w, h);
+  if (base.length < 2) return null;
+  const hyp = sym.mode === 'hyperbolic';
+  const ox = +sym.cx, oy = +sym.cy, R2 = hyp ? Math.max(16, +sym.hR || 900) ** 2 : 0;
+  const wt = (x, y) => (hyp ? 1 / Math.max(1e-6, R2 - (x - ox) ** 2 - (y - oy) ** 2) : 1);
+  const scale = Math.max(w, h);
+  const eps = Math.max(1, scale * 0.002);
+  const imagesOf = (x, y) => base.slice(1).map((t) => mobApply(t.mob, x, y));
+  const generic = (x, y) => {
+    if (hyp && (x - ox) ** 2 + (y - oy) ** 2 >= R2 * 0.999) return false;
+    for (const q of imagesOf(x, y)) if (Number.isFinite(q.x) && Math.hypot(q.x - x, q.y - y) < eps) return false;
+    return true;
+  };
+  let c = null;
+  const step = Math.max(1, Math.floor(pts.length / 64));
+  for (let i = 0; i < pts.length && !c; i += step) if (generic(pts[i].x, pts[i].y)) c = { x: pts[i].x, y: pts[i].y };
+  if (!c) {
+    // every sample sits on a mirror / centre: nudge off it
+    const p = pts[0];
+    for (let k = 1; k <= 24 && !c; k++) {
+      const a = k * 2.399963, r = eps * 2 * k;
+      if (generic(p.x + r * Math.cos(a), p.y + r * Math.sin(a))) c = { x: p.x + r * Math.cos(a), y: p.y + r * Math.sin(a) };
+    }
+  }
+  if (!c) return null;
+  if (sym.mode === 'rotate') {
+    const n = Math.max(1, Math.round(sym.n)), ang = (+sym.angle || 0) * Math.PI / 180, wedge = 2 * Math.PI / n;
+    const r = Math.hypot(c.x - ox, c.y - oy);
+    const phi = Math.atan2(-(c.y - oy), c.x - ox);
+    const k = Math.floor((phi - ang) / wedge);
+    const mid = ang + (k + 0.5) * wedge;
+    c = { x: ox + r * Math.cos(mid), y: oy - r * Math.sin(mid) };
+  }
+  const w0 = wt(c.x, c.y);
+  const imgs = imagesOf(c.x, c.y)
+    .filter((q) => Number.isFinite(q.x) && Math.hypot(q.x - c.x, q.y - c.y) >= eps * 0.5)
+    .map((q) => ({ x: q.x, y: q.y, w: wt(q.x, q.y) }))
+    .map((q) => ({ ...q, d: ((q.x - c.x) ** 2 + (q.y - c.y) ** 2) * (hyp ? q.w * w0 : 1) }))
+    .sort((a, b) => a.d - b.d)
+    .slice(0, CROP_SITES);
+  const sites = new Float32Array(CROP_SITES * 3);
+  imgs.forEach((q, i) => { sites[i * 3] = q.x; sites[i * 3 + 1] = q.y; sites[i * 3 + 2] = q.w; });
+  return { c: [c.x, c.y], w0, sites, n: imgs.length };
 }

@@ -4,7 +4,7 @@ import {
   STROKE_MODES, ADDITIVE_MODES, SOFT_MODES, DASH_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
 } from './shaders.js';
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
-import { allTransformsCached, mobApply, mobScaleAt, isAffine, setCopyLimit } from './symmetry.js';
+import { allTransformsCached, mobApply, mobScaleAt, isAffine, setCopyLimit, cropDomain, symKey } from './symmetry.js';
 import { warpActive, warpIndex } from './warp.js';
 import { solveWeave } from './weave.js';
 import { chainsCached } from './chains.js';
@@ -379,6 +379,29 @@ export class Renderer {
     }
   }
 
+  /** Crop-to-cell uniforms (engine/symmetry.js cropDomain), cached per stroke revision and symmetry. */
+  setCrop(P, doc, s) {
+    const gl = this.gl;
+    if (P.uni.u_clipN === undefined) return;
+    let D = null;
+    if (s.sym && s.sym.crop) {
+      if (!this.cropCache) this.cropCache = new Map();
+      const key = s.rev + '|' + symKey(s.sym, doc.width, doc.height) + '|' + s.sym.hR;
+      const hit = this.cropCache.get(s.id);
+      if (hit && hit.key === key) D = hit.D;
+      else {
+        D = cropDomain(s.sym, getSamples(s), doc.width, doc.height);
+        if (this.cropCache.size > 2000) this.cropCache.clear();
+        this.cropCache.set(s.id, { key, D });
+      }
+    }
+    if (!D) { gl.uniform1f(P.uni.u_clipN, 0); return; }
+    gl.uniform1f(P.uni.u_clipN, D.n);
+    gl.uniform2f(P.uni.u_clipC, D.c[0], D.c[1]);
+    gl.uniform1f(P.uni.u_clipW0, D.w0);
+    gl.uniform3fv(P.uni['u_clipP[0]'], D.sites);
+  }
+
   setWarp(P, s) {
     const gl = this.gl;
     const w = s.warp;
@@ -463,6 +486,7 @@ export class Renderer {
       gl.uniform1f(P.uni.u_shine, doc.light.shine);
       gl.uniform1f(P.uni.u_lightFollow, follow);
       this.setWarp(P, s);
+      this.setCrop(P, doc, s);
       gl.enable(gl.STENCIL_TEST);
       gl.stencilMask(0xff);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -574,6 +598,7 @@ export class Renderer {
       gl.uniform2f(P.uni.u_join, 0, 0);
     }
     this.setWarp(P, s);
+    this.setCrop(P, doc, s);
 
     const sign = weaving ? 1 : (st.overlap === 'earlier' ? -1 : 1);
     const nL = levels + 1, slice = 1.998 / nL;
