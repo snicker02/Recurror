@@ -184,3 +184,155 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
   };
   return { nodes, plateau, crossings, alternations, alternationsKept: kept, total, heightAt };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Knot weave: every strand of a layer, and all their symmetric copies, woven together.
+// Each source stroke keeps one height profile shared by its copies. A crossing between copy g of
+// stroke A and copy h of stroke B is the crossing of A with copy g⁻¹h of B, so scanning each source
+// stroke against every copy of every stroke of the layer finds them all. Hard constraint: the two
+// strands at a crossing sit at opposite heights. Soft: crossings alternate along each strand.
+// ---------------------------------------------------------------------------------------------
+
+function strandInfo(st) {
+  const { samples, closed } = st;
+  const n = samples.length;
+  const cum = new Float64Array(n + 1);
+  for (let i = 1; i <= n; i++) {
+    const a = samples[i - 1], b = samples[i % n];
+    cum[i] = cum[i - 1] + (i < n || closed ? Math.hypot(b.x - a.x, b.y - a.y) : 0);
+  }
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of samples) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  let R = 0;
+  for (const p of samples) R = Math.max(R, Math.hypot(p.x - cx, p.y - cy));
+  const segN = closed ? n : n - 1;
+  const cell = Math.max(6, Math.min(64, (x1 - x0 + y1 - y0) / 24));
+  const gx0 = Math.floor(x0 / cell) - 1, gy0 = Math.floor(y0 / cell) - 1;
+  const GW = Math.floor(x1 / cell) - gx0 + 2, GH = Math.floor(y1 / cell) - gy0 + 2;
+  const grid = new Map();
+  for (let i = 0; i < segN; i++) {
+    const a = samples[i], b = samples[(i + 1) % n];
+    const ia = Math.floor(Math.min(a.x, b.x) / cell) - gx0, ib = Math.floor(Math.max(a.x, b.x) / cell) - gx0;
+    const ja = Math.floor(Math.min(a.y, b.y) / cell) - gy0, jb = Math.floor(Math.max(a.y, b.y) / cell) - gy0;
+    for (let j = ja; j <= jb; j++) for (let k = ia; k <= ib; k++) {
+      const key = j * GW + k;
+      let l = grid.get(key); if (!l) grid.set(key, l = []); l.push(i);
+    }
+  }
+  return { ...st, n, segN, cum, total: closed ? cum[n] : cum[n - 1], cx, cy, R, cell, gx0, gy0, GW, GH, grid, stamp: new Int32Array(Math.max(1, segN)).fill(-1), stampId: 0 };
+}
+
+/**
+ * @param strands [{ id, samples, closed, xs (copies), maxHw, flip }]
+ * @returns Map id → { heightAt(s), nodes, crossings }
+ */
+export function solveKnot(strands) {
+  const S = strands.filter((s) => s.samples.length >= 2).map(strandInfo);
+  const out = new Map();
+  for (const s of strands) out.set(s.id, { heightAt: () => 0, nodes: [], crossings: 0 });
+  if (!S.length) return out;
+  const reach = (hwOther, hwOwn, cos) => {
+    const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
+    const L = (hwOther + hwOwn * cos) / Math.max(sin, 0.12) + 0.5 * hwOwn;
+    return Math.max(1.5 * hwOwn, Math.min(L, 12 * hwOwn));
+  };
+  const pairs = [];   // [ia, sa, ib, sb, ra, rb]
+  for (let ai = 0; ai < S.length; ai++) {
+    const A = S[ai];
+    for (let bi = 0; bi < S.length; bi++) {
+      const B = S[bi];
+      let tested = 0;
+      for (let j = 0; j < B.xs.length && tested < 1500; j++) {
+        const m = B.xs[j].mob;
+        const self = ai === bi && j === 0;
+        const c = mobApply(m, B.cx, B.cy);
+        const sc = Math.max(1e-3, mobScaleAt(m, B.cx, B.cy));
+        if (Math.hypot(c.x - A.cx, c.y - A.cy) > A.R + B.R * sc * 1.6 + 2 * (A.maxHw + B.maxHw)) continue;
+        tested++;
+        const P = B.samples.map((p) => mobApply(m, p.x, p.y));
+        for (let k = 0; k < B.segN; k++) {
+          const a = P[k], b = P[(k + 1) % B.n];
+          if (!Number.isFinite(a.x) || !Number.isFinite(b.x)) continue;
+          const ia = Math.floor(Math.min(a.x, b.x) / A.cell) - A.gx0, ib = Math.floor(Math.max(a.x, b.x) / A.cell) - A.gx0;
+          const ja = Math.floor(Math.min(a.y, b.y) / A.cell) - A.gy0, jb = Math.floor(Math.max(a.y, b.y) / A.cell) - A.gy0;
+          if (ib < 0 || jb < 0 || ia >= A.GW || ja >= A.GH) continue;
+          A.stampId++;
+          for (let r = Math.max(0, ja); r <= Math.min(A.GH - 1, jb); r++) for (let cc = Math.max(0, ia); cc <= Math.min(A.GW - 1, ib); cc++) {
+            const l = A.grid.get(r * A.GW + cc);
+            if (!l) continue;
+            for (const i of l) {
+              if (A.stamp[i] === A.stampId) continue;
+              A.stamp[i] = A.stampId;
+              if (self) {
+                if (i >= k) continue;
+                if (k - i <= 1 || (A.closed && i === 0 && k === A.segN - 1)) continue;
+              }
+              const s0 = A.samples[i], s1 = A.samples[(i + 1) % A.n];
+              const rr = segInter(s0.x, s0.y, s1.x, s1.y, a.x, a.y, b.x, b.y);
+              if (!rr) continue;
+              const sa = A.cum[i] + rr[0] * (A.cum[i + 1] - A.cum[i]);
+              const sb = B.cum[k] + rr[1] * (B.cum[k + 1] - B.cum[k]);
+              const ux = s1.x - s0.x, uy = s1.y - s0.y, vx = b.x - a.x, vy = b.y - a.y;
+              const cos = Math.min(1, Math.abs(ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1));
+              pairs.push([ai, sa, bi, sb, reach(B.maxHw * sc, A.maxHw, cos), reach(A.maxHw / sc, B.maxHw, cos)]);
+            }
+          }
+        }
+      }
+    }
+  }
+  // cluster each strand's crossing positions into nodes
+  const per = S.map(() => []);
+  pairs.forEach(([ai, sa, bi, sb, ra, rb], p) => { per[ai].push([sa, p, 0, ra]); per[bi].push([sb, p, 1, rb]); });
+  const ends = pairs.map(() => [0, 0]);
+  const nodeBase = [], nodeS = [], nodeR = [], nodeStrand = [];
+  S.forEach((A, ai) => {
+    const list = per[ai].sort((p, q) => p[0] - q[0]);
+    const tol = Math.max(0.25, A.maxHw * 0.15);
+    nodeBase[ai] = nodeS.length;
+    let last = -Infinity, sum = 0, cnt = 0, rmax = 0, cur = -1;
+    const flush = () => { if (cur >= 0) { nodeS[cur] = sum / cnt; nodeR[cur] = rmax; nodeStrand[cur] = ai; } };
+    for (const [s, p, side, rr] of list) {
+      if (s - last > tol) { flush(); cur = nodeS.length; nodeS.push(0); nodeR.push(0); nodeStrand.push(ai); sum = 0; cnt = 0; rmax = 0; }
+      sum += s; cnt++; last = s; rmax = Math.max(rmax, rr);
+      ends[p][side] = cur;
+    }
+    flush();
+  });
+  const N = nodeS.length;
+  const dsu = new ParityDSU(N);
+  let crossings = 0;
+  for (const [na, nb] of ends) if (na !== nb) { dsu.union(na, nb, 1); crossings++; }
+  // alternation along each strand
+  S.forEach((A, ai) => {
+    const b0 = nodeBase[ai], b1 = ai + 1 < S.length ? nodeBase[ai + 1] : N;
+    for (let i = b0; i + 1 < b1; i++) dsu.union(i, i + 1, 1);
+    if (A.closed && b1 - b0 > 2) dsu.union(b1 - 1, b0, 1);
+  });
+  S.forEach((A, ai) => {
+    const b0 = nodeBase[ai], b1 = ai + 1 < S.length ? nodeBase[ai + 1] : N;
+    const nodes = [];
+    for (let i = b0; i < b1; i++) nodes.push({ s: nodeS[i], h: (dsu.find(i)[1] ? -1 : 1) * (A.flip ? -1 : 1), r: Math.max(3, nodeR[i]) });
+    const M = nodes.length;
+    const heightAt = (s) => {
+      if (!M) return 0;
+      if (s <= nodes[0].s) return nodes[0].h;
+      if (s >= nodes[M - 1].s) return nodes[M - 1].h;
+      let lo = 0, hi = M - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (nodes[mid].s <= s) lo = mid; else hi = mid; }
+      const L = nodes[lo], Rn = nodes[hi];
+      if (L.h === Rn.h) return L.h;
+      const dl = s - L.s, dr = Rn.s - s, gap = Rn.s - L.s;
+      let t;
+      if (L.r + Rn.r < gap) {
+        if (dl <= L.r) return L.h;
+        if (dr <= Rn.r) return Rn.h;
+        t = (dl - L.r) / (gap - L.r - Rn.r);
+      } else t = dl / Math.max(1e-6, gap);
+      return L.h + (Rn.h - L.h) * Math.max(0, Math.min(1, t));
+    };
+    out.set(A.id, { heightAt, nodes, crossings: nodes.length });
+  });
+  return out;
+}

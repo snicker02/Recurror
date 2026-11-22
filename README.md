@@ -64,6 +64,8 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 
 **Frieze** (strip patterns): the 7 frieze groups, for borders and braids. p1 hop (translation), p11g step (glide), p1m1 sidle (mirrors across the strip), p11m jump (mirror along it), p2 spinning hop (half turns), p2mg spinning sidle and p2mm spinning jump. Set the **Repeat** length and the **Strip angle**; the guides show the centre line, the repeat lines, the mirrors and the half-turn centres. Crop to cell, recursion, the bucket and snapping all work with it.
 
+**Knot layer** (Layers panel): every strand in the layer, and all their symmetric copies, weave over and under each other Celtic-knot style, alternating at each crossing. Each stroke keeps one height profile for all its copies; crossings between strokes and copies are solved together (opposite heights at every crossing, alternation along every strand), and the layer's strands share one depth buffer drawn in three passes. Fills go underneath; washes, glows and draw-order strokes are drawn after, unwoven. The **Celtic band** and **Celtic cord** presets turn the active layer into a knot layer.
+
 ## Recursion (per stroke)
 
 - **Nest**: Mᴸ ∘ G, so the whole figure repeats inside itself.
@@ -112,6 +114,18 @@ New presets: Calligraphy, Brush pen, Rope, Pencil sketch, Dry brush, Watercolour
 - **End shading** with **Shade length** (in stroke widths) and **Shade ends** (both, start or end): graphite that darkens toward the ends of the line, as if it tucks under its neighbour. The shading reaches further along the edges than down the middle, so it curves like hand shading.
 - **Edge shading** with **Edge side** (left, both or right), **Grain** (pencil texture) and **Shade colour**.
 - Presets: Tangle strand, Tangle tube, Inked colour band. Draw a pattern such as Y-Braid piece by piece; each piece's ends get the tuck shading.
+
+## Realistic media
+
+**Paper** (Document panel): one sheet under every stroke and fill. Cold-press watercolour, hot-press, toothy sketch paper or canvas, with **Grain size** and **Paper strength**. Its relief shows on the background, dry media (pencil, dry brush, bristles, stamps) skip its valleys, harder pressure fills more of them, and washes (watercolour, airbrush) settle into them and granulate. Each brush's **Paper tooth** sets how much it catches; dry media and washes react most by default.
+
+**Ink pooling** (Brush section): more ink where the pen slowed down (the drawing speed is recorded with each freehand stroke), on sharp turns and along the edges, plus a round blot where the pen lands and lifts. Presets: Fineliner, Fountain pen, Ink brush pen.
+
+**Wet watercolour**: give a Watercolour stroke a **Wet spread** (drawing units) and its wash is painted wet. The layer's wet washes are rendered on their own and spread: the water carries the pigment outward to an irregular wet front shaped by noise and the paper (**Blooms**), pigment gathers at that front as it dries (**Edge darkening**) and settles into the paper's valleys (**Granulation**). Washes in the same layer bleed into each other where they meet, and they sit under the layer's other strokes, so ink lines stay crisp. The spread is measured in drawing units, so it looks the same at any zoom and in exports. Preset: Wet wash; the Watercolour preset is now wet too. Set Wet spread to 0 for the fixed watercolour look.
+
+**Bristle brush** (shading mode): the stroke is drawn as separate hairs (**Hairs** 4–48). Each hair carries its own load of paint and runs dry at its own point (**Dryness**), the hairs part on turns (**Hair spread**), and colours blend from A to B across the brush (**Colour blend**). Presets: Oil bristle, Gouache.
+
+**Stamp brush** (shading mode): a tip stamped along the path with **Spacing**, **Scatter**, **Rotation jitter**, **Size jitter** and **Flow**. Tips: round (soft), flat, chalk, sponge, splatter, or a picture you load (its dark or opaque parts paint; it's saved inside the document). Presets: Charcoal, Soft pastel, Spray paint, Sponge.
 
 ## Pattern fills
 
@@ -205,6 +219,12 @@ Other keys: S snap · G guides · Ctrl+J join · `[` `]` width · Ctrl+A select 
 Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and Strophe files still open: layers and groups get sensible defaults, and the old **Tile** mode becomes a wallpaper group (p1, or pmm when cells were mirrored).
 
 ## Changelog
+
+- **2.13.0**: Knot layers: Celtic-knot weaving across all the strands of a layer and their copies, with Celtic band and Celtic cord presets.
+
+- **2.12.0**: Wet watercolour: washes spread, gather pigment at the wet edge, granulate and bleed into each other (per layer, under its other strokes).
+
+- **2.11.0**: Realistic media: shared paper texture (cold press, hot press, sketch, canvas), ink pooling from recorded drawing speed, bristle brush, stamp brush with picture tips, and nine new presets.
 
 - **2.10.0**: Frieze symmetry (all 7 strip groups, with crop to cell) and five original pattern fills: Plaitwork, Pebbles, Scallops, Orb rings, Chevron folds.
 

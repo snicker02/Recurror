@@ -1,12 +1,12 @@
 // Recurror — WebGL1 renderer: layers → offscreen accumulation → screen / export.
 import {
-  strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS,
+  strokeVS, strokeFS, fillVS, fillFS, quadVS, compFS, blitFS, paperVS, paperFS, wetBlurFS, wetFS,
   STROKE_MODES, ADDITIVE_MODES, SOFT_MODES, DASH_MODES, GRAD_MODES, FILL_MODES, BLEND_MODES,
 } from './shaders.js';
 import { buildStrokeMesh, buildFillMesh, isClosed, STROKE_STRIDE, FILL_STRIDE, dropSamples, getSamples, boundCircle, sampleRev } from './geometry.js';
 import { allTransformsCached, transformsFor, mobApply, mobScaleAt, isAffine, setCopyLimit, cropDomain, symKey } from './symmetry.js';
 import { warpActive, warpIndex } from './warp.js';
-import { solveWeave } from './weave.js';
+import { solveWeave, solveKnot } from './weave.js';
 import { chainsCached } from './chains.js';
 import { seedOf } from './noise.js';
 
@@ -69,6 +69,29 @@ function program(gl, vs, fs) {
   return { p, uni, att };
 }
 
+const PAPER_TYPES = { none: 0, cold: 1, hot: 2, sketch: 3, canvas: 4 };
+function paperUniform(doc) {
+  return [PAPER_TYPES[doc.paperType] || 0, Math.max(0.5, +doc.paperScale || 6), Math.max(0, Math.min(1, +(doc.paperStrength ?? 0.6)))];
+}
+
+/** Inverse of an affine view matrix (column-major 3×3). */
+function invView(m) {
+  const a = m[0], b = m[1], c = m[3], d = m[4], tx = m[6], ty = m[7];
+  const det = a * d - b * c;
+  const ia = d / det, ib = -b / det, ic = -c / det, id = a / det;
+  return new Float32Array([ia, ib, 0, ic, id, 0, -(ia * tx + ic * ty), -(ib * tx + id * ty), 1]);
+}
+
+/** Strokes drawn with depth-ordered overlaps (the ones a knot weaves). */
+function isOrderedStyle(st) {
+  const mode = STROKE_MODES[st.mode] ?? 0;
+  return st.mode !== 'none' && st.opacity > 0 && !ADDITIVE_MODES.has(mode) && !SOFT_MODES.has(mode) && st.overlap !== 'blend';
+}
+function hashStr(str) { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
+
+/** A watercolour stroke whose wash spreads (painted wet, then simulated). */
+const isWet = (s) => s.style.mode === 'watercolor' && (+s.style.spread || 0) > 0;
+
 // ?noinst in the page URL forces the per-copy fallback path (used by the tests)
 function o_noInstancing() { try { return /[?&]noinst\b/.test(location.search); } catch { return false; } }
 
@@ -84,6 +107,16 @@ export class Renderer {
     this.progFill = program(gl, fillVS, fillFS);
     this.progComp = program(gl, quadVS, compFS);
     this.progBlit = program(gl, quadVS, blitFS);
+    this.progPaper = program(gl, paperVS, paperFS);
+    this.progWetBlur = program(gl, quadVS, wetBlurFS);
+    this.progWet = program(gl, quadVS, wetFS);
+    // 1×1 placeholder bound when a stamp brush has no picture tip
+    this.blankTip = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.blankTip);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.tips = new Map();          // asset id → { tex } (picture tips for stamp brushes)
+    this.onAsset = null;            // called when a picture tip finishes loading (the app redraws)
     this.meshes = new Map();
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
@@ -123,7 +156,7 @@ export class Renderer {
     const ds = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, ds);
     gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_STENCIL, w, h);
-    return { w, h, ds, A: this.makeTarget(w, h, ds), B: null, L: null };
+    return { w, h, ds, A: this.makeTarget(w, h, ds), B: null, L: null, W1: null, W2: null, W3: null };
   }
 
   ensureExtra(T) {
@@ -131,10 +164,14 @@ export class Renderer {
     if (!T.L) T.L = this.makeTarget(T.w, T.h, T.ds);
   }
 
+  ensureWet(T) {
+    for (const k of ['W1', 'W2', 'W3']) if (!T[k]) T[k] = this.makeTarget(T.w, T.h, T.ds);
+  }
+
   freeTargets(T) {
     if (!T) return;
     const gl = this.gl;
-    for (const k of ['A', 'B', 'L']) if (T[k]) { gl.deleteFramebuffer(T[k].fbo); gl.deleteTexture(T[k].tex); }
+    for (const k of ['A', 'B', 'L', 'W1', 'W2', 'W3']) if (T[k]) { gl.deleteFramebuffer(T[k].fbo); gl.deleteTexture(T[k].tex); }
     gl.deleteRenderbuffer(T.ds);
   }
 
@@ -168,6 +205,55 @@ export class Renderer {
     m.bound = boundCircle(stroke);
     m.rev = srev;
     return m;
+  }
+
+  /** A layer's strokes in order, or, for a knot layer, woven together: fills first, then the
+   *  strands in three shared-depth passes (depth, interiors, edges), then anything not woven. */
+  drawLayerStrokes(doc, layer, list, o) {
+    const gl = this.gl;
+    if (!layer.knot) { for (const s of list) this.drawStroke(doc, s, o); return; }
+    const strands = list.filter((s) => isOrderedStyle(s.style));
+    if (!strands.length) { for (const s of list) this.drawStroke(doc, s, o); return; }
+    const knot = this.knotFor(doc, layer, strands);
+    for (const s of list) this.drawStroke(doc, s, { ...o, only: 'fill' });
+    gl.depthMask(true);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    for (const pass of [1, 2, 3]) for (const s of strands) this.drawStroke(doc, s, { ...o, only: 'stroke', knot, knotPass: pass });
+    for (const s of list) if (!isOrderedStyle(s.style)) this.drawStroke(doc, s, { ...o, only: 'stroke' });
+  }
+
+  /** Upload a knot strand's heights (from the layer-wide solution) as the weave attribute. */
+  knotHeights(stroke, m, knot) {
+    const key = 'knot|' + knot.key;
+    if (m.weaveKey === key) return;
+    const W = knot.sol.get(stroke.id);
+    const h = new Float32Array(m.count);
+    for (let i = 0; i < m.count; i++) h[i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]);
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, h, gl.STATIC_DRAW);
+    m.weaveKey = key;
+    m.weaveInfo = { crossings: W.crossings, nodes: W.nodes.length, alternations: 0, kept: 0 };
+  }
+
+  /** Solve (or reuse) the weave of a knot layer's strands. */
+  knotFor(doc, layer, strands) {
+    if (!this.knotCache) this.knotCache = new Map();
+    const parts = [];
+    const input = strands.map((s) => {
+      const ch = this.chains ? this.chains.get(s.id) || null : null;
+      const m = this.mesh(s, ch);
+      const cropD = this.cropFor(doc, s);
+      const xs = transformsFor(s.sym, s.rec, doc.width, doc.height, cropD ? { x: cropD.c[0], y: cropD.c[1] } : m.bound);
+      parts.push(s.id + ':' + sampleRev(s) + ':' + xs.key + ':' + (s.style.weaveFlip ? 1 : 0) + ':' + m.maxHw.toFixed(3));
+      return { id: s.id, samples: getSamples(s), closed: isClosed(s), xs, maxHw: m.maxHw, flip: !!s.style.weaveFlip };
+    });
+    const key = parts.join('|');
+    const hit = this.knotCache.get(layer.id);
+    if (hit && hit.full === key) return hit;
+    const v = { full: key, key: layer.id + '#' + hashStr(key), sol: solveKnot(input) };
+    this.knotCache.set(layer.id, v);
+    return v;
   }
 
   weave(stroke, m, xs) {
@@ -252,6 +338,8 @@ export class Renderer {
     else { const bg = hexToRgb(doc.bg); gl.clearColor(bg[0], bg[1], bg[2], 1); }
     gl.clearDepth(1); gl.clearStencil(0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    this.paperU = paperUniform(doc);
+    if (!o.transparent && this.paperU[0] > 0) this.drawPaper(o, scissor);
 
     const live = new Set();
     for (const s of doc.strokes) live.add(s.id);
@@ -265,10 +353,15 @@ export class Renderer {
       for (const e of extra) if (e.layer === layer.id) list.push(e.stroke);
       if (!list.length) continue;
       const direct = (layer.blend || 'normal') === 'normal' && layer.opacity >= 0.999;
+      // wet watercolour washes are painted and spread first, under the layer's other strokes
+      const wet = list.filter(isWet);
+      const dry = wet.length ? list.filter((s) => !isWet(s)) : list;
+      const wetTex = wet.length ? this.paintWet(doc, wet, o, T, scissor) : null;
       if (direct) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.A.fbo);
         scissor();
-        for (const s of list) this.drawStroke(doc, s, o);
+        if (wetTex) this.blitOver(wetTex);
+        this.drawLayerStrokes(doc, layer, dry, o);
       } else {
         this.ensureExtra(T);
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.L.fbo);
@@ -276,7 +369,8 @@ export class Renderer {
         gl.clearColor(0, 0, 0, 0);
         gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
         scissor();
-        for (const s of list) this.drawStroke(doc, s, o);
+        if (wetTex) this.blitOver(wetTex);
+        this.drawLayerStrokes(doc, layer, dry, o);
         // composite L over A → B, then swap
         gl.bindFramebuffer(gl.FRAMEBUFFER, T.B.fbo);
         scissor();
@@ -391,6 +485,135 @@ export class Renderer {
     return D;
   }
 
+  /** Paint a layer's wet washes into W1 and spread them (W1 → blur W2 → W3 → result W2). */
+  paintWet(doc, wet, o, T, scissor) {
+    const gl = this.gl;
+    this.ensureWet(T);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W1.fbo);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+    scissor();
+    for (const s of wet) this.drawStroke(doc, s, o);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
+    let spread = 0, edge = 0, bloom = 0, gran = 0;
+    for (const s of wet) {
+      spread = Math.max(spread, +s.style.spread || 0);
+      edge = Math.max(edge, +(s.style.wetEdge ?? 0.6));
+      bloom = Math.max(bloom, +(s.style.bloom ?? 0.5));
+      gran = Math.max(gran, +(s.style.granulate ?? 0.5));
+    }
+    const R = Math.max(1, spread / o.pxWorld);                 // the spread in pixels at this zoom
+    const quad = (P) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+      this.setAttribs([P.att.a_pos]);
+      gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+    };
+    const PB = this.progWetBlur;
+    gl.useProgram(PB.p);
+    gl.uniform1i(PB.uni.u_src, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W2.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, T.W1.tex);
+    gl.uniform2f(PB.uni.u_step, R / 6 / T.w, 0);
+    quad(PB);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W3.fbo);
+    gl.bindTexture(gl.TEXTURE_2D, T.W2.tex);
+    gl.uniform2f(PB.uni.u_step, 0, R / 6 / T.h);
+    quad(PB);
+    const P = this.progWet;
+    gl.useProgram(P.p);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, T.W2.fbo);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, T.W1.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, T.W3.tex);
+    gl.uniform1i(P.uni.u_src, 0); gl.uniform1i(P.uni.u_blur, 1);
+    gl.uniformMatrix3fv(P.uni.u_invView, false, invView(o.viewMat));
+    const pu = this.paperU || [0, 6, 0.6];
+    gl.uniform3f(P.uni.u_paper, pu[0], pu[1], pu[2]);
+    gl.uniform4f(P.uni.u_wet, edge, bloom, gran, spread);
+    quad(P);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.enable(gl.BLEND);
+    return T.W2.tex;
+  }
+
+  /** Draw a premultiplied texture over the bound target. */
+  blitOver(tex) {
+    const gl = this.gl, P = this.progBlit;
+    gl.useProgram(P.p);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(P.uni.u_src, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    this.setAttribs([P.att.a_pos]);
+    gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  /** Multiply the paper's relief onto the background (artboard only). */
+  drawPaper(o, scissor) {
+    const gl = this.gl, P = this.progPaper;
+    const inv = invView(o.viewMat);
+    gl.useProgram(P.p);
+    gl.uniformMatrix3fv(P.uni.u_invView, false, inv);
+    gl.uniform3f(P.uni.u_paper, this.paperU[0], this.paperU[1], this.paperU[2]);
+    gl.uniform1f(P.uni.u_pxw, o.pxWorld);
+    scissor();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.DST_COLOR, gl.ZERO);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    this.setAttribs([P.att.a_pos]);
+    gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  }
+
+  /** Texture for a stamp brush's picture tip (alpha = the tip), loaded once from the document's assets. */
+  tipTexture(doc, id) {
+    if (!id || !doc.assets || !doc.assets[id]) return null;
+    const hit = this.tips.get(id);
+    if (hit) return hit.tex;
+    const entry = { tex: null };
+    this.tips.set(id, entry);
+    const img = new Image();
+    img.onload = () => {
+      const gl = this.gl, N = 128;
+      const cv = document.createElement('canvas'); cv.width = cv.height = N;
+      const cx = cv.getContext('2d');
+      cx.drawImage(img, 0, 0, N, N);
+      const px = cx.getImageData(0, 0, N, N).data;
+      // a picture with transparency uses its alpha; an opaque one uses its darkness
+      let opaque = true;
+      for (let i = 3; i < px.length; i += 4) if (px[i] < 250) { opaque = false; break; }
+      const out = new Uint8Array(N * N * 4);
+      for (let i = 0; i < N * N; i++) {
+        const r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2], al = px[i * 4 + 3];
+        const v = opaque ? 255 - (0.299 * r + 0.587 * g + 0.114 * b) : al;
+        out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = 255; out[i * 4 + 3] = v;
+      }
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, N, 0, gl.RGBA, gl.UNSIGNED_BYTE, out);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      entry.tex = tex;
+      if (this.onAsset) this.onAsset();
+    };
+    img.src = doc.assets[id];
+    return null;
+  }
+
   /** Crop-to-cell uniforms (engine/symmetry.js cropDomain), cached per stroke revision and symmetry. */
   setCrop(P, doc, s) {
     const gl = this.gl;
@@ -465,7 +688,7 @@ export class Renderer {
     // Even-odd stencilling needs each copy on its own, so copies are drawn in batches whose image
     // circles don't overlap: one instanced call per batch and pass, still one copy's parity per pixel.
     const f = s.fill;
-    if (m.fill && f && f.mode !== 'none' && f.opacity > 0) {
+    if (o.only !== 'stroke' && m.fill && f && f.mode !== 'none' && f.opacity > 0) {
       const P = this.progFill;
       const fm = m.fill;
       const looks = levelLooks(f.colA, f.colB, f.opacity, rec, levels);
@@ -495,6 +718,7 @@ export class Renderer {
       gl.uniform1f(P.uni.u_spec, doc.light.spec);
       gl.uniform1f(P.uni.u_shine, doc.light.shine);
       gl.uniform1f(P.uni.u_lightFollow, follow);
+      { const pu = this.paperU || [0, 6, 0.6]; gl.uniform3f(P.uni.u_paper, pu[0], pu[1], pu[2]); }
       this.setWarp(P, s);
       this.setCrop(P, doc, s);
       gl.enable(gl.STENCIL_TEST);
@@ -527,7 +751,7 @@ export class Renderer {
 
     // ---- stroke ----
     const st = s.style;
-    if (!m.count || st.mode === 'none' || st.opacity <= 0) return;
+    if (o.only === 'fill' || !m.count || st.mode === 'none' || st.opacity <= 0) return;
     const P = this.progStroke;
     gl.useProgram(P.p);
     const mode = STROKE_MODES[st.mode] ?? 0;
@@ -535,12 +759,15 @@ export class Renderer {
     const soft = SOFT_MODES.has(mode) && st.overlap !== 'blend';
     const ordered = !additive && !SOFT_MODES.has(mode) && st.overlap !== 'blend';
     gl.uniform1f(P.uni.u_softZ, soft ? 1 : 0);
-    const weaving = ordered && st.overlap === 'weave';
-    if (weaving) this.weave(s, m, xsAll);
+    // knot layer: every strand of the layer is woven with every other (heights from solveKnot)
+    const knotted = ordered && o.knot && o.knot.sol.has(s.id);
+    const weaving = knotted || (ordered && st.overlap === 'weave');
+    if (knotted) this.knotHeights(s, m, o.knot);
+    else if (weaving) this.weave(s, m, xsAll);
 
     this.uploadInstances(xs);
     const A = P.att, B = STROKE_STRIDE * 4;
-    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along].concat(weaving ? [A.a_weave] : []),
+    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along, A.a_ink].concat(weaving ? [A.a_weave] : []),
       this.inst ? [A.i_mA, A.i_mB, A.i_conj, A.i_idx] : []);
     gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
     gl.vertexAttribPointer(A.a_pos, 2, gl.FLOAT, false, B, 0);
@@ -549,6 +776,7 @@ export class Renderer {
     gl.vertexAttribPointer(A.a_tan, 2, gl.FLOAT, false, B, 24);
     gl.vertexAttribPointer(A.a_hw, 1, gl.FLOAT, false, B, 32);
     gl.vertexAttribPointer(A.a_along, 2, gl.FLOAT, false, B, 36);
+    gl.vertexAttribPointer(A.a_ink, 2, gl.FLOAT, false, B, 44);
     if (A.a_weave !== undefined && A.a_weave >= 0) {
       if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 1, gl.FLOAT, false, 0, 0); }
       else gl.vertexAttrib1f(A.a_weave, 0);
@@ -580,6 +808,24 @@ export class Renderer {
     gl.uniform2f(P.uni.u_stitch, fit(Math.max(1, +st.stitchSpacing || 14)), +(st.stitchSlant ?? 0.6));
     gl.uniform1f(P.uni.u_seed, (seedOf(s.id || 'x') % 997) * 0.731);
     gl.uniform1f(P.uni.u_baseHw, Math.max(0.25, (+st.width || 18) * 0.5));
+    {
+      const pu = this.paperU || [0, 6, 0.6];
+      gl.uniform3f(P.uni.u_paper, pu[0], pu[1], pu[2]);
+      const TOOTH = { sketch: 1, drybrush: 1, bristle: 1, stamp: 1, watercolor: 1, airbrush: 0.8 };
+      gl.uniform1f(P.uni.u_tooth, Math.max(0, Math.min(1.5, (st.tooth ?? 0.5) * 2 * (TOOTH[st.mode] ?? 0.3))));
+      gl.uniform1f(P.uni.u_pool, Math.max(0, Math.min(1, +st.pool || 0)));
+      gl.uniform4f(P.uni.u_bristle, Math.max(2, Math.min(64, Math.round(+st.hairs || 18))), +(st.dryness ?? 0.45), +(st.hairSpread ?? 0.5), +(st.hairBlend ?? 0.6));
+      gl.uniform4f(P.uni.u_stamp, Math.max(0.03, +(st.stampSpacing ?? 0.25)), Math.max(0, +(st.stampScatter ?? 0.3)), +(st.stampRot ?? 0.5), +(st.stampSizeJit ?? 0.3));
+      const TIPS = { round: 0, flat: 1, chalk: 2, sponge: 3, splatter: 4, image: 5 };
+      let tip = TIPS[st.stampTip] ?? 0;
+      const tex = tip === 5 ? this.tipTexture(doc, st.stampImg) : null;
+      if (tip === 5 && !tex) tip = 0;
+      gl.uniform3f(P.uni.u_stamp2, tip, Math.max(0.02, Math.min(1, +(st.stampFlow ?? 0.6))), tex ? 1 : 0);
+      gl.uniform1f(P.uni.u_stampPad, st.mode === 'stamp' ? 1 + Math.max(0, +st.stampScatter || 0) + Math.max(0, +st.stampSizeJit || 0) * 0.5 : 1);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex || this.blankTip);
+      gl.uniform1i(P.uni.u_tip, 2);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     {
       const sc = hexToRgb(st.shadeCol || '#262626'), ic = hexToRgb(st.inkCol || '#000000'), which = st.shadeWhich || 'both';
       gl.uniform4f(P.uni.u_shade, +st.shadeEnds || 0, Math.max(0.5, (+st.shadeLen || 1.5) * (+st.width || 18)), +st.shadeEdge || 0, +(st.shadeGrain ?? 0.35));
@@ -658,6 +904,24 @@ export class Renderer {
       gl.blendFunc(gl.ONE, additive ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform1f(P.uni.u_pass, 0);
       drawCopies();
+    } else if (knotted) {
+      // one pass of the layer-wide knot: depth is shared by all its strands, cleared once per layer
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      if (o.knotPass === 1) {
+        gl.depthMask(true);
+        gl.uniform1f(P.uni.u_pass, 1);
+        gl.colorMask(false, false, false, false);
+        drawCopies();
+        gl.colorMask(true, true, true, true);
+      } else {
+        gl.depthMask(false);
+        gl.uniform1f(P.uni.u_pass, o.knotPass === 2 ? 1 : 2);
+        drawCopies();
+        gl.depthMask(true);
+      }
+      gl.disable(gl.DEPTH_TEST);
     } else {
       // depth prepass on fully covered pixels → interiors that won → AA fringes on top
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);

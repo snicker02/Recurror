@@ -4,7 +4,7 @@ import { strokeNoise, seedOf } from './noise.js';
 
 // Stroke vertex layout (floats):
 //   a_pos(2) a_ext(2) a_vc(2) a_tan(2) a_hw(1) a_along(2)  = 11
-export const STROKE_STRIDE = 11;
+export const STROKE_STRIDE = 13;   // … along(2) | ink(2): slowness of the pen, sharpness of the turn
 
 const sampleCache = new Map();
 
@@ -67,6 +67,18 @@ export function halfWidths(stroke, samples, closed, join = null) {
     }
     hw[i] = base * Math.max(0.02, f) * Math.max(0, samples[i].w ?? 1);
   }
+  // ink pooling: a small blot where the pen lands and lifts (not at an end that joins another stroke)
+  const pool = Math.max(0, Math.min(1, st.pool ?? 0));
+  if (pool > 0 && !closed && n > 1 && total > st.width) {
+    const R = Math.max(1, base * 1.6);
+    for (let i = 0; i < n; i++) {
+      let bump = 0;
+      if (!(join && join.s)) bump = Math.max(bump, 0.55 * Math.exp(-((cum[i] / R) ** 2)));
+      if (!(join && join.e)) bump = Math.max(bump, 0.4 * Math.exp(-(((total - cum[i]) / R) ** 2)));
+      // the blot is a round pool of ink: at least this wide, however the line tapers there
+      hw[i] = Math.max(hw[i] * (1 + 0.5 * pool * bump), base * 1.25 * pool * bump);
+    }
+  }
   return { hw, cum, total };
 }
 
@@ -116,8 +128,26 @@ export function buildStrokeMesh(stroke, join = null) {
   const { hw, cum, total } = halfWidths(stroke, S, closed && n > 2, join);
   // wobble moves the drawn centreline only; arc lengths stay those of the spline (gradients, dashes, chains)
   S = wobbled(stroke, S, cum, total, closed && n > 2, join);
+  // stamp brushes scatter their stamps sideways: the strip is widened to hold them
+  const stampPad = stroke.style.mode === 'stamp' ? 1 + Math.max(0, +stroke.style.stampScatter || 0) + Math.max(0, +stroke.style.stampSizeJit || 0) * 0.5 : 1;
+  if (stampPad !== 1) for (let i = 0; i < m; i++) hw[i] *= stampPad;
   let maxHw = 0;
   for (let i = 0; i < m; i++) maxHw = Math.max(maxHw, hw[i]);
+  // ink attribute per sample: how slowly the pen moved here (recorded while drawing) and how sharp
+  // the turn is (relative to the stroke width)
+  const slow = new Float32Array(m), turn = new Float32Array(m);
+  {
+    const P = stroke.points;
+    if (P.some((p) => p.s > 0)) {
+      for (let i = 0; i < m; i++) {
+        const k = Math.max(0, Math.min(P.length - 1, S[i].seg ?? 0));
+        const a = P[k], b = P[Math.min(P.length - 1, k + 1)];
+        const da = Math.hypot(S[i].x - a.x, S[i].y - a.y), db = Math.hypot(S[i].x - b.x, S[i].y - b.y);
+        const t = da + db > 1e-9 ? da / (da + db) : 0;
+        slow[i] = (a.s || 0) * (1 - t) + (b.s || 0) * t;
+      }
+    }
+  }
 
   // tangents & miters
   const tx = new Float32Array(m), ty = new Float32Array(m);
@@ -163,6 +193,7 @@ export function buildStrokeMesh(stroke, join = null) {
     const segNx = -oy, segNy = ox;
     const dd = Math.max(nx * segNx + ny * segNy, 1 / 3);
     mx[i] = nx / dd; my[i] = ny / dd;
+    if (inner[i]) turn[i] = Math.min(1, 1.6 * hw[i] / Math.max(1e-6, innerK[i]));
     if (inner[i]) {
       const reach = hw[i] * Math.hypot(mx[i], my[i]);
       innerK[i] = reach > 0 ? Math.min(1, 0.9 * innerK[i] / reach) : 1;
@@ -191,6 +222,7 @@ export function buildStrokeMesh(stroke, join = null) {
     data[o++] = tx[i]; data[o++] = ty[i];
     data[o++] = hw[i];
     data[o++] = len / totalLen; data[o++] = len;
+    data[o++] = slow[i]; data[o++] = turn[i];
   };
   // calligraphy nib: each side is offset along the fixed nib (normal + (cos/f)·tangent), giving the
   // slanted swept-pen envelope; the perpendicular reach stays exactly hw, so edge anti-aliasing holds
@@ -307,5 +339,7 @@ export function boundCircle(stroke) {
   for (const p of sm) r = Math.max(r, Math.hypot(p.x - cx, p.y - cy));
   let wmax = 1;
   for (const p of stroke.points) wmax = Math.max(wmax, p.w ?? 1);
-  return { x: cx, y: cy, r: r + stroke.style.width * (0.5 * wmax * (1 + 0.85 * (stroke.style.jitter ?? 0)) + 0.6 * (stroke.style.wobble ?? 0)) };
+  const st = stroke.style;
+  const stamp = st.mode === 'stamp' ? 1 + Math.max(0, +st.stampScatter || 0) + Math.max(0, +st.stampSizeJit || 0) * 0.5 : 1;
+  return { x: cx, y: cy, r: r + st.width * (0.5 * wmax * stamp * (1 + 0.85 * (st.jitter ?? 0)) * (1 + 0.8 * (st.pool ?? 0)) + 0.6 * (st.wobble ?? 0)) };
 }

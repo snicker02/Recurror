@@ -13,7 +13,7 @@ import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js'
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 
-export const VERSION = '2.10.0';
+export const VERSION = '2.13.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -29,7 +29,7 @@ const octx = ovCanvas.getContext('2d');
 
 let renderer = null;
 let panelTabs = null;         // phone tab layout (engine/tabs.js)
-try { renderer = new Renderer(glCanvas); }
+try { renderer = new Renderer(glCanvas); renderer.onAsset = () => { dirty = true; }; }
 catch (err) {
   const box = $('#glError');
   box.hidden = false;
@@ -96,7 +96,7 @@ const TOUCH_HINTS = {
 if (window.matchMedia && matchMedia('(pointer: coarse)').matches) Object.assign(HINTS, TOUCH_HINTS);
 
 // presets reset the brush-shape modifiers first, so switching looks never inherits a leftover nib or dash
-const SHAPE_RESET = { nibRatio: 1, jitter: 0, wobble: 0, dash: 'none', shadeEnds: 0, shadeEdge: 0, ink: 0 };
+const SHAPE_RESET = { nibRatio: 1, jitter: 0, wobble: 0, dash: 'none', shadeEnds: 0, shadeEdge: 0, ink: 0, pool: 0, tooth: 0.5, spread: 0 };
 const PRESETS = {
   'Gilded tube': { mode: 'tube', colA: '#f2c46d', colB: '#c2410c', grad: 'along', width: 18, opacity: 1 },
   'Neon': { mode: 'neon', colA: '#22d3ee', colB: '#e879f9', grad: 'along', width: 22, glow: 1.2, taperStart: 0, taperEnd: 0, opacity: 1 },
@@ -113,7 +113,7 @@ const PRESETS = {
   'Rope': { mode: 'rope', colA: '#e9d5a1', colB: '#a16207', grad: 'none', width: 26, strands: 3, twist: 1.6, taperStart: 0, taperEnd: 0, opacity: 1 },
   'Pencil sketch': { mode: 'sketch', colA: '#d6d3d1', colB: '#d6d3d1', grad: 'none', width: 14, strands: 3, rough: 0.6, wobble: 0.25, wobbleScale: 160, taperStart: 0.1, taperEnd: 0.2, opacity: 0.9 },
   'Dry brush': { mode: 'drybrush', colA: '#f97316', colB: '#7c2d12', grad: 'along', width: 40, rough: 0.6, pressure: 0.5, taperStart: 0.05, taperEnd: 0.3, opacity: 1 },
-  'Watercolour': { mode: 'watercolor', colA: '#60a5fa', colB: '#a78bfa', grad: 'along', width: 46, rough: 0.6, jitter: 0.3, jitterScale: 90, taperStart: 0.1, taperEnd: 0.2, opacity: 0.9 },
+  'Watercolour': { mode: 'watercolor', colA: '#60a5fa', colB: '#a78bfa', grad: 'along', width: 46, rough: 0.6, jitter: 0.3, jitterScale: 90, taperStart: 0.1, taperEnd: 0.2, opacity: 0.9 , spread: 26, wetEdge: 0.6, bloom: 0.55, granulate: 0.5, tooth: 0.5},
   'Pearls': { mode: 'tube', colA: '#f8fafc', colB: '#cbd5e1', grad: 'none', width: 20, dash: 'dot', dashGap: 26, taperStart: 0, taperEnd: 0, pressure: 0, opacity: 1 },
   'Dotted line': { mode: 'flat', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 7, dash: 'dot', dashGap: 14, taperStart: 0, taperEnd: 0, pressure: 0, opacity: 1 },
   'Dashed line': { mode: 'flat', colA: '#f5f5f4', colB: '#f5f5f4', grad: 'none', width: 6, dash: 'dash', dashLen: 26, dashGap: 14, taperStart: 0, taperEnd: 0, pressure: 0, cap: 'butt', opacity: 1 },
@@ -124,6 +124,18 @@ const PRESETS = {
     ink: 2, inkCol: '#0a0a0a', shadeEnds: 0.85, shadeLen: 1.2, shadeWhich: 'both', shadeEdge: 0, shadeSide: 0, shadeGrain: 0.3, shadeCol: '#1f1f1f', opacity: 1 },
   'Inked colour band': { mode: 'flat', colA: '#f472b6', colB: '#60a5fa', grad: 'along', width: 34, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'later',
     ink: 2.4, inkCol: '#0a0a0a', shadeEnds: 0.6, shadeLen: 1.2, shadeWhich: 'both', shadeEdge: 0.25, shadeSide: 0, shadeGrain: 0.5, shadeCol: '#1e1b4b', opacity: 1 },
+  'Fineliner': { mode: 'flat', colA: '#16161a', colB: '#16161a', grad: 'none', width: 3.5, pressure: 0.15, taperStart: 0.01, taperEnd: 0.02, cap: 'round', pool: 0.55, tooth: 0.2, opacity: 1 },
+  'Fountain pen': { mode: 'flat', colA: '#1e2a5a', colB: '#1e2a5a', grad: 'none', width: 7, pressure: 0.5, taperStart: 0.03, taperEnd: 0.06, cap: 'round', nibRatio: 0.35, nibAngle: 35, pool: 0.8, tooth: 0.25, opacity: 1 },
+  'Ink brush pen': { mode: 'flat', colA: '#111111', colB: '#111111', grad: 'none', width: 16, pressure: 0.85, taperStart: 0.15, taperEnd: 0.4, cap: 'round', pool: 0.6, jitter: 0.12, opacity: 1 },
+  'Oil bristle': { mode: 'bristle', colA: '#c2410c', colB: '#f2c46d', grad: 'none', width: 34, pressure: 0.4, taperStart: 0.04, taperEnd: 0.12, cap: 'round', hairs: 22, dryness: 0.35, hairSpread: 0.6, hairBlend: 0.7, tooth: 0.5, overlap: 'later', opacity: 1 },
+  'Gouache': { mode: 'bristle', colA: '#2563eb', colB: '#60a5fa', grad: 'none', width: 40, pressure: 0.3, taperStart: 0.03, taperEnd: 0.08, cap: 'round', hairs: 32, dryness: 0.15, hairSpread: 0.3, hairBlend: 0.35, tooth: 0.3, overlap: 'later', opacity: 1 },
+  'Charcoal': { mode: 'stamp', colA: '#1c1917', colB: '#1c1917', grad: 'none', width: 16, pressure: 0.6, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'chalk', stampSpacing: 0.12, stampScatter: 0.15, stampRot: 1, stampSizeJit: 0.25, stampFlow: 0.55, tooth: 0.7, overlap: 'blend', opacity: 1 },
+  'Soft pastel': { mode: 'stamp', colA: '#f472b6', colB: '#f472b6', grad: 'none', width: 30, pressure: 0.5, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'chalk', stampSpacing: 0.1, stampScatter: 0.2, stampRot: 1, stampSizeJit: 0.3, stampFlow: 0.45, tooth: 0.6, overlap: 'blend', opacity: 1 },
+  'Spray paint': { mode: 'stamp', colA: '#22c55e', colB: '#22c55e', grad: 'none', width: 40, pressure: 0.3, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'splatter', stampSpacing: 0.18, stampScatter: 0.9, stampRot: 1, stampSizeJit: 0.6, stampFlow: 0.8, tooth: 0.2, overlap: 'blend', opacity: 1 },
+  'Sponge': { mode: 'stamp', colA: '#a855f7', colB: '#a855f7', grad: 'none', width: 48, pressure: 0.2, taperStart: 0, taperEnd: 0, cap: 'round', stampTip: 'sponge', stampSpacing: 0.55, stampScatter: 0.25, stampRot: 1, stampSizeJit: 0.3, stampFlow: 0.75, tooth: 0.4, overlap: 'blend', opacity: 1 },
+  'Wet wash': { mode: 'watercolor', colA: '#2b6cb0', colB: '#7fb3e0', grad: 'along', width: 46, pressure: 0.4, taperStart: 0.05, taperEnd: 0.1, cap: 'round', rough: 0.4, spread: 48, wetEdge: 0.75, bloom: 0.7, granulate: 0.6, tooth: 0.5, opacity: 0.8 },
+  'Celtic band': { knot: true, mode: 'flat', colA: '#e9d7a8', colB: '#e9d7a8', grad: 'none', width: 22, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'weave', ink: 2.2, inkCol: '#2a1a0a', shadeEdge: 0.25, shadeGrain: 0.3, shadeCol: '#5a3d1a', opacity: 1 },
+  'Celtic cord': { knot: true, mode: 'tube', colA: '#d4a017', colB: '#8b5a00', grad: 'across', width: 18, pressure: 0, taperStart: 0, taperEnd: 0, cap: 'round', overlap: 'weave', ink: 1.4, inkCol: '#2a1a0a', opacity: 1 },
   'Cross stitch': { mode: 'stitch', colA: '#fca5a5', colB: '#b91c1c', grad: 'none', width: 18, stitchSpacing: 12, stitchSlant: 0.9, taperStart: 0, taperEnd: 0, opacity: 1 },
 };
 
@@ -270,6 +282,7 @@ function updateUndo() {
 function getSource(root) {
   if (TPL_ROOTS.has(root)) return tpl[root];
   if (root === 'bfill') return ui.bucketFill;
+  if (root === 'layer') return activeLayer();
   if (root === 'light') return doc.light;
   if (root === 'doc') return doc;
   if (root === 'ui') return ui;
@@ -426,11 +439,15 @@ function bindPanel() {
   const preset = $('#preset');
   for (const name of Object.keys(PRESETS)) preset.appendChild(Object.assign(document.createElement('option'), { value: name, textContent: name }));
   preset.addEventListener('change', () => {
-    const p = PRESETS[preset.value];
-    if (!p) return;
+    const pr = PRESETS[preset.value];
+    if (!pr) return;
+    const { knot, ...p } = pr;
     Object.assign(tpl.style, SHAPE_RESET, p);
     for (const s of selection) { Object.assign(s.style, SHAPE_RESET, p); touch(s); }
-    if (selection.length) commit();
+    // knot presets weave the whole layer
+    const L = activeLayer();
+    if (knot && !L.knot) { L.knot = true; flashHint(`“${L.name}” is now a knot layer: every strand in it weaves over and under the others.`); }
+    if (selection.length || knot) commit();
     preset.value = '';
     refreshPanel();
   });
@@ -743,7 +760,7 @@ function beginDraw(w, e, sx, sy) {
   const sw = j ? { x: j.x, y: j.y } : snapWorld(w.x, w.y);
   const p = pressureOf(e);
   const l = unwarp(tpl.warp, tpl.sym, sw.x, sw.y);
-  drag = { kind: 'draw', raw: [{ x: l.x, y: l.y, p }], smooth: { x: sw.x, y: sw.y }, snapped: !!snapShow, s0: { sx, sy }, t0: performance.now(), maxMove: 0 };
+  drag = { kind: 'draw', raw: [{ x: l.x, y: l.y, p, t: performance.now() }], smooth: { x: sw.x, y: sw.y }, snapped: !!snapShow, s0: { sx, sy }, t0: performance.now(), maxMove: 0 };
   preview = makePreview(drag.raw, { spline: 'linear', closed: false });
 }
 
@@ -756,7 +773,7 @@ function extendDraw(w, e) {
   const lastV = viewPointTpl(last);
   if (Math.hypot(sm.x - lastV.x, sm.y - lastV.y) * view.zoom < 1.5) return;
   const l = unwarp(tpl.warp, tpl.sym, sm.x, sm.y, last);
-  drag.raw.push({ x: l.x, y: l.y, p: pressureOf(e) });
+  drag.raw.push({ x: l.x, y: l.y, p: pressureOf(e), t: performance.now() });
   preview.points = (drag.chain || []).concat(drag.raw);
   preview.rev = nextRev();
 }
@@ -775,10 +792,30 @@ function endDraw() {
   }
   const chain = drag && drag.chain ? drag.chain : (endDraw.chain || []);
   endDraw.chain = null;
+  markSlowness(raw);
   let pts = raw.length > 2 ? simplify(raw, Math.max(0.15, ui.smooth) / view.zoom) : raw.slice();
   pts = chain.concat(pts);
   commitStroke(pts);
   dirty = true;
+}
+
+/** Slowness of the pen per raw point (0 fast … 1 lingering), from screen speed; ink pools where it's high. */
+function markSlowness(raw) {
+  const n = raw.length;
+  if (n < 3) return;
+  const v = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = raw[Math.max(0, i - 2)], b = raw[Math.min(n - 1, i + 2)];
+    const dt = Math.max(1, (b.t || 0) - (a.t || 0));
+    v[i] = Math.hypot(b.x - a.x, b.y - a.y) * view.zoom / dt;            // screen px per ms
+  }
+  for (let i = 0; i < n; i++) {
+    let sum = 0, cnt = 0;
+    for (let k = Math.max(0, i - 2); k <= Math.min(n - 1, i + 2); k++) { sum += v[k]; cnt++; }
+    const sp = sum / cnt;
+    const t = Math.max(0, Math.min(1, (sp - 0.08) / (1.0 - 0.08)));
+    raw[i].s = +(1 - t * t * (3 - 2 * t)).toFixed(2);
+  }
 }
 
 function pressureOf(e) {
@@ -1296,6 +1333,31 @@ const actions = {
   },
   layerUp() { moveLayer(1); },
   layerDown() { moveLayer(-1); },
+  loadTip() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return;
+      const img = new Image();
+      img.onload = () => {
+        const N = 128, cv = document.createElement('canvas');
+        cv.width = cv.height = N;
+        const cx = cv.getContext('2d');
+        const k = Math.min(N / img.width, N / img.height);
+        cx.drawImage(img, (N - img.width * k) / 2, (N - img.height * k) / 2, img.width * k, img.height * k);
+        const id = newId('tip');
+        doc.assets = doc.assets || {};
+        doc.assets[id] = cv.toDataURL('image/png');
+        URL.revokeObjectURL(img.src);
+        setValue('style.stampTip', 'image');
+        setValue('style.stampImg', id);
+        refreshPanel(); commit(); dirty = true;
+      };
+      img.src = URL.createObjectURL(f);
+    };
+    inp.click();
+  },
   bucketFromFill() {
     const f = clone(tpl.fill);
     if (f.mode === 'none') f.mode = 'flat';
@@ -1635,13 +1697,13 @@ function boot() {
   setTool('draw');
   if (renderer) {
     glCanvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
-    glCanvas.addEventListener('webglcontextrestored', () => { try { renderer = new Renderer(glCanvas); dirty = true; } catch (err) { console.error(err); } });
+    glCanvas.addEventListener('webglcontextrestored', () => { try { renderer = new Renderer(glCanvas); renderer.onAsset = () => { dirty = true; }; dirty = true; } catch (err) { console.error(err); } });
   }
   requestAnimationFrame(frame);
 
   // test / automation hook
   window.recurror = {
-    get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc, bucketAt: (x, y) => bucketFill({ x, y }),
+    get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc, serialise, bucketAt: (x, y) => bucketFill({ x, y }),
     get selection() { return selection; }, select: (ids) => setSelection(doc.strokes.filter((s) => ids.includes(s.id)), null),
     get stats() { return renderer && renderer.stats; },
     redraw: () => { dirty = true; draw(); },
