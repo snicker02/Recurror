@@ -570,6 +570,33 @@ export function cropDomain(sym, pts, w, h) {
     const mid = ang + (k + 0.5) * wedge;
     c = { x: ox + r * Math.cos(mid), y: oy - r * Math.sin(mid) };
   }
+  if (sym.mode === 'wallpaper') {
+    // The guide's lattice cell holding c, intersected with c's Voronoi cell on the torus (the
+    // cell with opposite edges glued) among the orbit points of c. Every point of the torus has
+    // one lift into that parallelogram, so the copies tile exactly, and the cuts run along the
+    // guide's cell lines (plus the mirrors, or bisectors between rotation centres, inside it).
+    const { a, b } = latticeBasis(sym);
+    const det = a[0] * b[1] - a[1] * b[0];
+    const Bi = [b[1] / det, -a[1] / det, -b[0] / det, a[0] / det];
+    const frac = (x, y) => { const dx = x - ox, dy = y - oy; return [Bi[0] * dx + Bi[2] * dy, Bi[1] * dx + Bi[3] * dy]; };
+    const fc = frac(c.x, c.y);
+    const cell = [Math.floor(fc[0]), Math.floor(fc[1])];
+    const red = (f) => [f[0] - Math.floor(f[0]), f[1] - Math.floor(f[1])];
+    const near = (p, q) => { const dx = Math.abs(p[0] - q[0]), dy = Math.abs(p[1] - q[1]); return Math.min(dx, 1 - dx) < 1e-4 && Math.min(dy, 1 - dy) < 1e-4; };
+    const rc = red(fc);
+    const reps = [];
+    for (const q of imagesOf(c.x, c.y)) {
+      if (!Number.isFinite(q.x)) continue;
+      const r = red(frac(q.x, q.y));
+      if (near(r, rc) || reps.some((x) => near(x, r))) continue;
+      reps.push(r);
+    }
+    const sites = new Float32Array(CROP_SITES * 3);
+    reps.slice(0, CROP_SITES).forEach((r, i) => {
+      sites[i * 3] = ox + a[0] * r[0] + b[0] * r[1]; sites[i * 3 + 1] = oy + a[1] * r[0] + b[1] * r[1]; sites[i * 3 + 2] = 1;
+    });
+    return { mode: 2, c: [c.x, c.y], w0: 1, sites, n: Math.min(CROP_SITES, reps.length), origin: [ox, oy], basis: [a[0], a[1], b[0], b[1]], inv: Bi, cell };
+  }
   const w0 = wt(c.x, c.y);
   const imgs = imagesOf(c.x, c.y)
     .filter((q) => Number.isFinite(q.x) && Math.hypot(q.x - c.x, q.y - c.y) >= eps * 0.5)
@@ -579,5 +606,5 @@ export function cropDomain(sym, pts, w, h) {
     .slice(0, CROP_SITES);
   const sites = new Float32Array(CROP_SITES * 3);
   imgs.forEach((q, i) => { sites[i * 3] = q.x; sites[i * 3 + 1] = q.y; sites[i * 3 + 2] = q.w; });
-  return { c: [c.x, c.y], w0, sites, n: imgs.length };
+  return { mode: 1, c: [c.x, c.y], w0, sites, n: imgs.length };
 }

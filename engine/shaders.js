@@ -132,12 +132,37 @@ varying vec2 v_T;
 varying vec2 v_N;
 varying vec2 v_cl;
 
-uniform float u_clipN;      // crop to cell: number of neighbouring sites (0 = off)
+uniform float u_clipN;      // crop to cell: number of neighbouring sites
+uniform float u_clipMode;   // 0 off · 1 Dirichlet cell · 2 lattice cell ∩ torus Voronoi (wallpaper)
 uniform vec2 u_clipC;       // the cell's own site
 uniform float u_clipW0;     // its distance weight (1, or the hyperbolic factor)
 uniform vec3 u_clipP[16];   // neighbouring sites (x, y, weight)
+uniform vec2 u_clipO;       // wallpaper: lattice origin, basis, inverse basis, cell index
+uniform mat2 u_clipB;
+uniform mat2 u_clipBi;
+uniform vec2 u_clipCell;
+float torusD2(vec2 d) {
+  vec2 f = u_clipBi * d;
+  f -= floor(f + 0.5);
+  float m = 1e30;
+  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
+    vec2 q = u_clipB * (f + vec2(float(i), float(j)));
+    m = min(m, dot(q, q));
+  }
+  return m;
+}
 bool cropped(vec2 l) {
-  if (u_clipN < 0.5) return false;
+  if (u_clipMode < 0.5) return false;
+  if (u_clipMode > 1.5) {
+    vec2 f = floor(u_clipBi * (l - u_clipO) + 1e-5);
+    if (abs(f.x - u_clipCell.x) > 0.5 || abs(f.y - u_clipCell.y) > 0.5) return true;
+    float t0 = torusD2(l - u_clipC);
+    for (int j = 0; j < 16; j++) {
+      if (float(j) >= u_clipN) break;
+      if (torusD2(l - u_clipP[j].xy) < t0) return true;
+    }
+    return false;
+  }
   vec2 d = l - u_clipC;
   float d0 = dot(d, d) * u_clipW0;
   for (int j = 0; j < 16; j++) {
@@ -432,12 +457,37 @@ varying float v_pxl;
 varying vec2 v_l0;
 varying vec2 v_l1;
 
-uniform float u_clipN;      // crop to cell: number of neighbouring sites (0 = off)
+uniform float u_clipN;      // crop to cell: number of neighbouring sites
+uniform float u_clipMode;   // 0 off · 1 Dirichlet cell · 2 lattice cell ∩ torus Voronoi (wallpaper)
 uniform vec2 u_clipC;       // the cell's own site
 uniform float u_clipW0;     // its distance weight (1, or the hyperbolic factor)
 uniform vec3 u_clipP[16];   // neighbouring sites (x, y, weight)
+uniform vec2 u_clipO;       // wallpaper: lattice origin, basis, inverse basis, cell index
+uniform mat2 u_clipB;
+uniform mat2 u_clipBi;
+uniform vec2 u_clipCell;
+float torusD2(vec2 d) {
+  vec2 f = u_clipBi * d;
+  f -= floor(f + 0.5);
+  float m = 1e30;
+  for (int i = -1; i <= 1; i++) for (int j = -1; j <= 1; j++) {
+    vec2 q = u_clipB * (f + vec2(float(i), float(j)));
+    m = min(m, dot(q, q));
+  }
+  return m;
+}
 bool cropped(vec2 l) {
-  if (u_clipN < 0.5) return false;
+  if (u_clipMode < 0.5) return false;
+  if (u_clipMode > 1.5) {
+    vec2 f = floor(u_clipBi * (l - u_clipO) + 1e-5);
+    if (abs(f.x - u_clipCell.x) > 0.5 || abs(f.y - u_clipCell.y) > 0.5) return true;
+    float t0 = torusD2(l - u_clipC);
+    for (int j = 0; j < 16; j++) {
+      if (float(j) >= u_clipN) break;
+      if (torusD2(l - u_clipP[j].xy) < t0) return true;
+    }
+    return false;
+  }
   vec2 d = l - u_clipC;
   float d0 = dot(d, d) * u_clipW0;
   for (int j = 0; j < 16; j++) {
