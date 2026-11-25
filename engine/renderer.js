@@ -227,8 +227,14 @@ export class Renderer {
     const key = 'knot|' + knot.key;
     if (m.weaveKey === key) return;
     const W = knot.sol.get(stroke.id);
-    const h = new Float32Array(m.count);
-    for (let i = 0; i < m.count; i++) h[i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]);
+    // (height, distance along the strand to the edge of a strand passing over it)
+    const h = new Float32Array(m.count * 2), D = m.data;
+    for (let i = 0; i < m.count; i++) {
+      const o = i * STROKE_STRIDE, sArc = D[o + 10];
+      const x = (D[o + 2] * -D[o + 7] + D[o + 3] * D[o + 6]) * D[o + 8];   // lateral offset: ext · N
+      h[2 * i] = W.heightAt(sArc);
+      h[2 * i + 1] = W.underAt(sArc, x);
+    }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo);
     gl.bufferData(gl.ARRAY_BUFFER, h, gl.STATIC_DRAW);
@@ -261,8 +267,8 @@ export class Renderer {
     const key = xs.key + '|' + (st.weaveFlip ? 1 : 0);
     if (m.weaveKey === key) return m.weaveInfo;
     const W = solveWeave(getSamples(stroke), isClosed(stroke), xs, m.maxHw, !!st.weaveFlip);
-    const h = new Float32Array(m.count);
-    for (let i = 0; i < m.count; i++) h[i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]);
+    const h = new Float32Array(m.count * 2);
+    for (let i = 0; i < m.count; i++) { h[2 * i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]); h[2 * i + 1] = 1e4; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo);
     gl.bufferData(gl.ARRAY_BUFFER, h, gl.STATIC_DRAW);
@@ -778,8 +784,8 @@ export class Renderer {
     gl.vertexAttribPointer(A.a_along, 2, gl.FLOAT, false, B, 36);
     gl.vertexAttribPointer(A.a_ink, 2, gl.FLOAT, false, B, 44);
     if (A.a_weave !== undefined && A.a_weave >= 0) {
-      if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 1, gl.FLOAT, false, 0, 0); }
-      else gl.vertexAttrib1f(A.a_weave, 0);
+      if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 2, gl.FLOAT, false, 0, 0); }
+      else gl.vertexAttrib2f(A.a_weave, 0, 1e4);
     }
     const looks = levelLooks(st.colA, st.colB, st.opacity, rec, levels);
     gl.uniformMatrix3fv(P.uni.u_view, false, o.viewMat);
@@ -831,6 +837,8 @@ export class Renderer {
       gl.uniform4f(P.uni.u_shade, +st.shadeEnds || 0, Math.max(0.5, (+st.shadeLen || 1.5) * (+st.width || 18)), +st.shadeEdge || 0, +(st.shadeGrain ?? 0.35));
       gl.uniform3f(P.uni.u_shade2, which !== 'end' ? 1 : 0, which !== 'start' ? 1 : 0, +st.shadeSide || 0);
       gl.uniform3f(P.uni.u_shadeCol, sc[0], sc[1], sc[2]);
+      // knot strands get the same graphite where they pass under another strand
+      gl.uniform1f(P.uni.u_under, knotted ? Math.max(0, (+st.shadeEnds || 0) * (+(st.shadeUnder ?? 1)))  : 0);
       gl.uniform1f(P.uni.u_ink, Math.max(0, +st.ink || 0));
       gl.uniform3f(P.uni.u_inkCol, ic[0], ic[1], ic[2]);
     }
