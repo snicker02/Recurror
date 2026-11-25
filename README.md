@@ -225,6 +225,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.15.1**: Knot fix: no more outline breaks at shallow or crowded crossings. Each strand's height now follows each crossing's slanted footprint (arc length and lateral position), not arc length alone.
 - **2.15.0**: Knot layers with tangle shading now shade each strand where it passes under another, from the edge of the strand on top (following slanted crossings), for a faux 3D look. Under shading slider (× End shading).
 - **2.14.0**: Drawing grid (square, dots, isometric, polar), independent of the symmetry, for regular drawing; Snap snaps to its intersections and lines; never exported; toggle with the Grid checkbox or # / '.
 - **2.13.0**: Knot layers: Celtic-knot weaving across all the strands of a layer and their copies, with Celtic band and Celtic cord presets.

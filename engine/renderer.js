@@ -232,7 +232,7 @@ export class Renderer {
     for (let i = 0; i < m.count; i++) {
       const o = i * STROKE_STRIDE, sArc = D[o + 10];
       const x = (D[o + 2] * -D[o + 7] + D[o + 3] * D[o + 6]) * D[o + 8];   // lateral offset: ext · N
-      h[2 * i] = W.heightAt(sArc);
+      h[2 * i] = W.heightAtX(sArc, x);
       h[2 * i + 1] = W.underAt(sArc, x);
     }
     const gl = this.gl;

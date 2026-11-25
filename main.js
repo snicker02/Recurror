@@ -14,7 +14,7 @@ import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.15.0';
+export const VERSION = '2.15.1';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -1718,6 +1718,7 @@ function boot() {
     get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc, serialise, bucketAt: (x, y) => bucketFill({ x, y }), snapPoint: (x, y) => snapWorld(x, y),
     get selection() { return selection; }, select: (ids) => setSelection(doc.strokes.filter((s) => ids.includes(s.id)), null),
     get stats() { return renderer && renderer.stats; },
+    get renderer() { return renderer; },
     redraw: () => { dirty = true; draw(); },
   };
 }

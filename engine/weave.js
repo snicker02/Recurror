@@ -230,7 +230,7 @@ function strandInfo(st) {
 export function solveKnot(strands) {
   const S = strands.filter((s) => s.samples.length >= 2).map(strandInfo);
   const out = new Map();
-  for (const s of strands) out.set(s.id, { heightAt: () => 0, underAt: () => 1e4, unders: [], nodes: [], crossings: 0 });
+  for (const s of strands) out.set(s.id, { heightAt: () => 0, heightAtX: () => 0, underAt: () => 1e4, unders: [], nodes: [], crossings: 0 });
   if (!S.length) return out;
   const reach = (hwOther, hwOwn, cos) => {
     const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
@@ -319,14 +319,20 @@ export function solveKnot(strands) {
     for (let i = b0; i + 1 < b1; i++) dsu.union(i, i + 1, 1);
     if (A.closed && b1 - b0 > 2) dsu.union(b1 - 1, b0, 1);
   });
-  // the crossings each strand passes under (h < 0 at its node), with the over strand's footprint
-  const unders = S.map(() => []);
+  // Each crossing covers a slanted parallelogram of the strand, |s − s0 − x·cot| < o in its own
+  // (arc length, lateral) coordinates. The strand's height is held over exactly that footprint,
+  // so neighbouring crossings whose overlaps crowd each other along the centre line (shallow
+  // crossings) no longer fight over one arc-length profile. Under-crossings also drive shading.
+  const feet = S.map(() => []), unders = S.map(() => []);
   const hOf = (node) => (dsu.find(node)[1] ? -1 : 1) * (S[nodeStrand[node]].flip ? -1 : 1);
   pairs.forEach(([ai, sa, bi, sb, , , cA, oA, cB, oB], p) => {
     const [na, nb] = ends[p];
     if (na === nb) return;
-    if (hOf(na) < 0) unders[ai].push({ s: sa, c: cA, o: oA });
-    if (hOf(nb) < 0) unders[bi].push({ s: sb, c: cB, o: oB });
+    const ha = hOf(na), hb = hOf(nb);
+    feet[ai].push({ s: sa, c: cA, o: oA, h: ha });
+    feet[bi].push({ s: sb, c: cB, o: oB, h: hb });
+    if (ha < 0) unders[ai].push({ s: sa, c: cA, o: oA });
+    if (hb < 0) unders[bi].push({ s: sb, c: cB, o: oB });
   });
   S.forEach((A, ai) => {
     const b0 = nodeBase[ai], b1 = ai + 1 < S.length ? nodeBase[ai + 1] : N;
@@ -362,7 +368,23 @@ export function solveKnot(strands) {
       }
       return d;
     };
-    out.set(A.id, { heightAt, underAt, unders: U, nodes, crossings: nodes.length });
+    // height at (s, x): the crossing whose footprint is nearest holds its height out to a small
+    // margin (anti-aliased edges); between footprints, blend the two nearest by distance
+    const F = feet[ai], margin = 1.5 + 0.12 * A.maxHw;
+    const heightAtX = (s, x) => {
+      if (!F.length) return 0;
+      let f1 = Infinity, h1 = 0, f2 = Infinity, h2 = 0;
+      for (const u of F) {
+        let ds = s - u.s - x * u.c;
+        if (A.closed && T > 0) ds -= T * Math.round(ds / T);
+        const f = Math.max(0, Math.abs(ds) - u.o - margin);
+        if (f < f1) { f2 = f1; h2 = h1; f1 = f; h1 = u.h; }
+        else if (f < f2) { f2 = f; h2 = u.h; }
+      }
+      if (f1 <= 0 || h1 === h2 || f2 === Infinity) return h1;
+      return h1 + (h2 - h1) * f1 / (f1 + f2);
+    };
+    out.set(A.id, { heightAt, heightAtX, underAt, unders: U, nodes, crossings: nodes.length });
   });
   return out;
 }
