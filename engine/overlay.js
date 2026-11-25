@@ -39,6 +39,8 @@ export function drawOverlay(ctx, s) {
   if (s.hover && !s.selection.includes(s.hover)) outline(ctx, s.hover, X, Y, 'rgba(125,211,252,0.55)', []);
   for (const st of s.selection) outline(ctx, st, X, Y, st === s.primary ? 'rgba(125,211,252,0.95)' : 'rgba(125,211,252,0.6)', [4, 4]);
 
+  if (s.xbox) drawXformBox(ctx, s.xbox, X, Y);
+
   const pr = s.primary;
   if (pr && (s.tool === 'edit' || s.tool === 'width')) {
     const pts = pr.points.map((p) => viewPoint(pr, p.x, p.y));
@@ -111,6 +113,46 @@ export function drawOverlay(ctx, s) {
     ctx.arc(X(s.cursor.x), Y(s.cursor.y), Math.max(1.5, s.brushWidth * 0.5 * zoom), 0, Math.PI * 2);
     ctx.stroke();
   }
+}
+
+/** Selection transform box: corner squares scale, the round knob above it rotates. */
+export function xformHandles(b, X, Y, coarse = false) {
+  const x0 = X(b.x0), x1 = X(b.x1), y0 = Y(b.y0), y1 = Y(b.y1);
+  const pad = 6;
+  const L = Math.min(x0, x1) - pad, R = Math.max(x0, x1) + pad, T = Math.min(y0, y1) - pad, B = Math.max(y0, y1) + pad;
+  const out = { box: [L, T, R, B], corners: [[L, T], [R, T], [R, B], [L, B]], size: coarse ? 14 : 9 };
+  if (b.rot) out.rot = [(L + R) / 2, T - (coarse ? 34 : 26)];
+  return out;
+}
+
+function drawXformBox(ctx, b, X, Y) {
+  const h = xformHandles(b, X, Y, b.coarse);
+  const [L, T, R, B] = h.box;
+  ctx.save();
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = 'rgba(253,186,116,0.8)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(Math.round(L) + 0.5, Math.round(T) + 0.5, Math.round(R - L), Math.round(B - T));
+  ctx.setLineDash([]);
+  if (h.rot) {
+    ctx.beginPath(); ctx.moveTo((L + R) / 2, T); ctx.lineTo(h.rot[0], h.rot[1]); ctx.stroke();
+    ctx.beginPath(); ctx.arc(h.rot[0], h.rot[1], h.size / 2 + 1, 0, Math.PI * 2);
+    ctx.fillStyle = b.hot === 'rot' ? '#fdba74' : '#1c1917'; ctx.fill();
+    ctx.strokeStyle = '#fdba74'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+  h.corners.forEach(([x, y], i) => {
+    const r = h.size / 2;
+    ctx.fillStyle = b.hot === i ? '#fdba74' : '#1c1917';
+    ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+    ctx.strokeStyle = '#fdba74'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(x - r, y - r, 2 * r, 2 * r);
+  });
+  if (b.label) {
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(253,186,116,0.95)';
+    ctx.fillText(b.label, L, B + 15);
+  }
+  ctx.restore();
 }
 
 function outline(ctx, stroke, X, Y, color, dash) {
