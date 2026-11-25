@@ -230,7 +230,7 @@ function strandInfo(st) {
 export function solveKnot(strands) {
   const S = strands.filter((s) => s.samples.length >= 2).map(strandInfo);
   const out = new Map();
-  for (const s of strands) out.set(s.id, { heightAt: () => 0, nodes: [], crossings: 0 });
+  for (const s of strands) out.set(s.id, { heightAt: () => 0, underAt: () => 1e4, unders: [], nodes: [], crossings: 0 });
   if (!S.length) return out;
   const reach = (hwOther, hwOwn, cos) => {
     const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
@@ -274,8 +274,17 @@ export function solveKnot(strands) {
               const sa = A.cum[i] + rr[0] * (A.cum[i + 1] - A.cum[i]);
               const sb = B.cum[k] + rr[1] * (B.cum[k + 1] - B.cum[k]);
               const ux = s1.x - s0.x, uy = s1.y - s0.y, vx = b.x - a.x, vy = b.y - a.y;
-              const cos = Math.min(1, Math.abs(ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1));
-              pairs.push([ai, sa, bi, sb, reach(B.maxHw * sc, A.maxHw, cos), reach(A.maxHw / sc, B.maxHw, cos)]);
+              const lu = Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1;
+              const dot = (ux * vx + uy * vy) / lu, crs = (ux * vy - uy * vx) / lu;
+              const cos = Math.min(1, Math.abs(dot));
+              // where the other strand's edges cross this one, for shading where a strand passes
+              // under: in this strand's (arc length s, lateral x) the other's centre line is
+              // s = s0 + x·cot, and it covers ±hwOther/|sin| along s about it
+              const sin = Math.max(0.12, Math.abs(crs)), cot = dot / (Math.abs(crs) < 1e-6 ? 1e-6 : crs);
+              const cotC = Math.max(-8.3, Math.min(8.3, cot));
+              const orient = m.conj ? -1 : 1;
+              pairs.push([ai, sa, bi, sb, reach(B.maxHw * sc, A.maxHw, cos), reach(A.maxHw / sc, B.maxHw, cos),
+                cotC, B.maxHw * sc / sin, -orient * cotC, A.maxHw / sc / sin]);
             }
           }
         }
@@ -310,6 +319,15 @@ export function solveKnot(strands) {
     for (let i = b0; i + 1 < b1; i++) dsu.union(i, i + 1, 1);
     if (A.closed && b1 - b0 > 2) dsu.union(b1 - 1, b0, 1);
   });
+  // the crossings each strand passes under (h < 0 at its node), with the over strand's footprint
+  const unders = S.map(() => []);
+  const hOf = (node) => (dsu.find(node)[1] ? -1 : 1) * (S[nodeStrand[node]].flip ? -1 : 1);
+  pairs.forEach(([ai, sa, bi, sb, , , cA, oA, cB, oB], p) => {
+    const [na, nb] = ends[p];
+    if (na === nb) return;
+    if (hOf(na) < 0) unders[ai].push({ s: sa, c: cA, o: oA });
+    if (hOf(nb) < 0) unders[bi].push({ s: sb, c: cB, o: oB });
+  });
   S.forEach((A, ai) => {
     const b0 = nodeBase[ai], b1 = ai + 1 < S.length ? nodeBase[ai + 1] : N;
     const nodes = [];
@@ -332,7 +350,19 @@ export function solveKnot(strands) {
       } else t = dl / Math.max(1e-6, gap);
       return L.h + (Rn.h - L.h) * Math.max(0, Math.min(1, t));
     };
-    out.set(A.id, { heightAt, nodes, crossings: nodes.length });
+    // distance along the strand from (s, x) to the nearest edge of a strand passing over it
+    // (negative inside the covered part): where "end shading" starts when a strand goes under
+    const U = unders[ai], T = A.total;
+    const underAt = (s, x) => {
+      let d = 1e4;
+      for (const u of U) {
+        let ds = s - u.s - x * u.c;
+        if (A.closed && T > 0) ds -= T * Math.round(ds / T);
+        d = Math.min(d, Math.abs(ds) - u.o);
+      }
+      return d;
+    };
+    out.set(A.id, { heightAt, underAt, unders: U, nodes, crossings: nodes.length });
   });
   return out;
 }

@@ -88,7 +88,7 @@ attribute vec2 a_vc;
 attribute vec2 a_tan;
 attribute float a_hw;
 attribute vec2 a_along;
-attribute float a_weave;
+attribute vec2 a_weave;       // (weave height, distance to the edge of a strand passing over)
 attribute vec2 a_ink;         // (slowness of the pen, sharpness of the turn)
 
 uniform float u_lightFollow;  // 1 = light lives in each copy's local frame
@@ -107,8 +107,10 @@ varying vec2 v_N;
 varying vec2 v_cl;            // local (pre-copy) position, for crop-to-cell
 varying vec2 v_ink;
 varying vec2 v_wp;            // world position (the paper lives here)
+varying float v_under;
 
 void main() {
+  v_under = a_weave.y;
   vec2 w0 = mobP(a_pos);
   mat2 J = warpJ(w0) * mobJ(a_pos);
   float det = abs(J[0][0] * J[1][1] - J[1][0] * J[0][1]);
@@ -117,7 +119,7 @@ void main() {
   float e = a_hw + pad;
   vec2 p = warpP(w0) + J * (a_ext * e);
   vec3 c = u_view * vec3(p, 1.0);
-  float zv = u_weaveOn > 0.5 ? (-0.9 * a_weave + 0.05 * (1.0 - 2.0 * a_along.x)) : (1.0 - 2.0 * a_along.x);
+  float zv = u_weaveOn > 0.5 ? (-0.9 * a_weave.x + 0.05 * (1.0 - 2.0 * a_along.x)) : (1.0 - 2.0 * a_along.x);
   gl_Position = vec4(c.xy, u_softZ > 0.5 ? 0.999 - 1.998 * i_idx : u_zOff + u_zScale * zv, 1.0);
   v_dc = a_vc * e;
   v_cl = a_pos + a_ext * e;
@@ -170,6 +172,8 @@ uniform float u_seed;       // per-stroke noise seed
 uniform float u_baseHw;     // nominal half width (local): noise scales don't explode where the stroke tapers
 uniform float u_softZ;      // 1 = translucent wash: interiors judged by geometric coverage
 uniform vec4 u_shade;       // graphite shading: (end amount, end length (local), edge amount, grain)
+uniform float u_under;      // knot: graphite where the strand passes under another
+varying float v_under;
 uniform vec3 u_shade2;      // (shade start, shade end, side bias −1…1)
 uniform vec3 u_shadeCol;
 uniform float u_ink;        // ink outline width (local units, 0 = off)
@@ -494,7 +498,7 @@ void main() {
   // Zentangle-style graphite shading, on top of any mode: darkest where the line ends (it tucks
   // under its neighbour), reaching further along the edges than down the middle, plus edge shading
   float ax = clamp(abs(v_dc.x) / hw, 0.0, 1.0);
-  if (u_shade.x > 0.0 || u_shade.z > 0.0) {
+  if (u_shade.x > 0.0 || u_shade.z > 0.0 || u_under > 0.0) {
     float kEnd = 0.0;
     if (u_shade.x > 0.0 && u_loop < 0.5) {
       float d = 1e9;
@@ -505,7 +509,14 @@ void main() {
     }
     float side = v_dc.x >= 0.0 ? 1.0 : -1.0;
     float kEdge = u_shade.z * smoothstep(0.25, 1.0, ax) * clamp(1.0 + u_shade2.z * side, 0.0, 1.0);
-    float k = 1.0 - (1.0 - kEnd) * (1.0 - kEdge);
+    // passing under another strand reads like the line ending there: the same graphite, measured
+    // from the other strand's edge
+    float kUnder = 0.0;
+    if (u_under > 0.0) {
+      float L = max(u_shade.y, 1e-3);
+      kUnder = clamp(u_under, 0.0, 1.0) * (1.0 - smoothstep(0.0, L, v_under - 0.6 * L * ax * ax));
+    }
+    float k = 1.0 - (1.0 - kEnd) * (1.0 - kUnder) * (1.0 - kEdge);
     if (u_shade.w > 0.0) {
       vec2 gp = vec2(sC, v_dc.x) * (2.5 / max(u_baseHw, 0.25)) + u_seed;
       float g = 0.65 * vnoise2(gp) + 0.35 * vnoise2(gp * 3.1 + 7.0);
