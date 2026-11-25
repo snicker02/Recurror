@@ -1,4 +1,5 @@
 // Recurror — 2D overlay: guides, selection, handles, tool feedback.
+import { drawGrid } from './grid.js';
 import { getSamples, isClosed } from './geometry.js';
 import { warpPoint, warpActive } from './warp.js';
 
@@ -32,6 +33,7 @@ export function drawOverlay(ctx, s) {
   ctx.setLineDash([]);
   ctx.strokeRect(Math.round(X(0)) + 0.5, Math.round(Y(0)) + 0.5, Math.round(W * zoom), Math.round(H * zoom));
 
+  if (s.grid) drawGrid(ctx, s.grid, s.view, W, H);
   if (s.showGuides && s.guides) drawGuides(ctx, s.guides, X, Y, s.tool === 'center');
 
   if (s.hover && !s.selection.includes(s.hover)) outline(ctx, s.hover, X, Y, 'rgba(125,211,252,0.55)', []);
