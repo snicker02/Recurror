@@ -25,6 +25,7 @@
   <div class="group">
     <label class="inline" title="Snap to guides, centre and recursion anchors (S)"><input type="checkbox" data-bind="ui.snap"> Snap</label>
     <label class="inline" title="Show symmetry guides (G)"><input type="checkbox" data-bind="ui.showGuides"> Guides</label>
+    <label class="inline" title="Drawing grid, independent of the symmetry; with Snap on, points snap to it (# or ')"><input type="checkbox" data-bind="doc.gridOn"> Grid</label>
   </div>
   <div class="group right">
     <label class="inline">Scale
@@ -354,6 +355,12 @@
         <select data-bind="doc.paperType"><option value="none">None (smooth)</option><option value="cold">Cold-press watercolour</option><option value="hot">Hot-press</option><option value="sketch">Toothy sketch paper</option><option value="canvas">Canvas</option></select></div>
       <div class="row" data-show="doc.paperType=cold|hot|sketch|canvas"><label>Grain size</label><input type="range" min="1" max="40" step="0.5" data-bind="doc.paperScale"><output></output></div>
       <div class="row" data-show="doc.paperType=cold|hot|sketch|canvas"><label>Paper strength</label><input type="range" min="0" max="1" step="0.01" data-bind="doc.paperStrength"><output></output></div>
+      <div class="row"><label title="A drawing aid only: never rendered or exported, and independent of the symmetry">Grid</label><input type="checkbox" data-bind="doc.gridOn"></div>
+      <div class="row" data-show="doc.gridOn=true"><label>Grid type</label>
+        <select data-bind="doc.gridType"><option value="square">Square</option><option value="dots">Dots</option><option value="iso">Isometric (triangles)</option><option value="polar">Polar (rings and spokes)</option></select></div>
+      <div class="row" data-show="doc.gridOn=true"><label title="Major spacing, in drawing units">Grid size</label><input type="range" min="4" max="512" step="1" data-bind="doc.gridSize"><output></output></div>
+      <div class="row" data-show="doc.gridOn=true"><label title="Minor divisions per major cell">Subdivisions</label><input type="range" min="1" max="10" step="1" data-bind="doc.gridSub"><output></output></div>
+      <div class="row" data-show="doc.gridOn=true&doc.gridType=polar"><label>Spokes</label><input type="range" min="4" max="72" step="1" data-bind="doc.gridSpokes"><output></output></div>
       <div class="row"><label>Artboard</label>
         <select id="docSize">
           <option value="2048x2048">2048 × 2048</option>

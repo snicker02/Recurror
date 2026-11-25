@@ -12,8 +12,9 @@ import { defaultWarp, warpActive, warpInverse, warpPoint, WARPS, WARP_LABELS } f
 import { simplify, nearestOnPolyline, pointInPolygon } from './engine/spline.js';
 import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
+import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.13.0';
+export const VERSION = '2.14.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -235,7 +236,7 @@ function draw() {
     view, doc, guides: ui.showGuides ? guidesCached(activeSym(), activeRec(), activeWarp(), doc.width, doc.height) : null,
     showGuides: ui.showGuides, selection, primary, hover, handleHot, widthHot,
     penPoints: penPoints.map((p) => viewPointTpl(p)), penCloseHot, cursor, tool, brushWidth: tpl.style.width,
-    marquee, snap: snapShow,
+    marquee, snap: snapShow, grid: gridOf(doc),
   });
 }
 
@@ -323,6 +324,11 @@ function setValue(path, v) {
     }
   }
   if (root === 'ui' && key === 'snap' && !v) snapShow = null;
+  // keep every control bound to the same value in step (e.g. Grid in the top bar and the Document panel)
+  for (const el of $$(`[data-bind="${path}"]`)) {
+    if (el.type === 'checkbox') el.checked = !!v;
+    else if (document.activeElement !== el) el.value = String(v);
+  }
   updateVisibility();
   dirty = true;
 }
@@ -659,7 +665,12 @@ function snapWorld(x, y, kind = 'guides') {
     for (const fx of [0, 1 / 3, 0.5, 2 / 3, 1]) for (const fy of [0, 1 / 3, 0.5, 2 / 3, 1]) pts.push({ x: W * fx, y: H * fy, kind: 'node' });
     hit = snapTo({ points: pts, lines: [] }, x, y, 12 / view.zoom);
   } else {
-    hit = snapTo(guidesCached(activeSym(), activeRec(), activeWarp(), doc.width, doc.height), x, y, 10 / view.zoom);
+    // grid intersections and lines take part like the symmetry guides; whichever is nearest wins
+    const g = gridOf(doc);
+    const gh = g ? snapTo(gridSnapTargets(g, x, y), x, y, 10 / view.zoom) : null;
+    const sh = ui.showGuides || !g ? snapTo(guidesCached(activeSym(), activeRec(), activeWarp(), doc.width, doc.height), x, y, 10 / view.zoom) : null;
+    const d = (h) => (h ? Math.hypot(h.x - x, h.y - y) + (h.onLine ? 10 / view.zoom : 0) : Infinity);
+    hit = d(gh) <= d(sh) ? gh : sh;
   }
   snapShow = hit;
   return hit ? { x: hit.x, y: hit.y } : { x, y };
@@ -1649,6 +1660,7 @@ function onKeyDown(e) {
       else if (k === 'k') setTool('bucket');
       else if (k === 'f') fitView();
       else if (k === 'g') { ui.showGuides = !ui.showGuides; refreshPanel(); dirty = true; }
+      else if (e.key === '#' || e.key === "'") { doc.gridOn = !doc.gridOn; commit(); refreshPanel(); dirty = true; }
       else if (k === 's') { ui.snap = !ui.snap; if (!ui.snap) snapShow = null; refreshPanel(); dirty = true; }
   }
 }
@@ -1703,7 +1715,7 @@ function boot() {
 
   // test / automation hook
   window.recurror = {
-    get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc, serialise, bucketAt: (x, y) => bucketFill({ x, y }),
+    get doc() { return doc; }, set doc(d) { loadDoc(d); }, tpl, ui, view, actions, setTool, VERSION, normaliseDoc, serialise, bucketAt: (x, y) => bucketFill({ x, y }), snapPoint: (x, y) => snapWorld(x, y),
     get selection() { return selection; }, select: (ids) => setSelection(doc.strokes.filter((s) => ids.includes(s.id)), null),
     get stats() { return renderer && renderer.stats; },
     redraw: () => { dirty = true; draw(); },

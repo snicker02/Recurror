@@ -41,7 +41,8 @@ export function defaultLayer(name = 'Layer 1') { return { id: newId('L'), name, 
 export function newDocument(w = 2048, h = 2048) {
   const L = defaultLayer();
   return { format: FORMAT, version: FORMAT_VERSION, width: w, height: h, bg: '#0e0f13', light: defaultLight(), layers: [L], activeLayer: L.id, groups: [], blendEnds: true,
-    paperType: 'none', paperScale: 6, paperStrength: 0.6, assets: {}, strokes: [] };
+    paperType: 'none', paperScale: 6, paperStrength: 0.6, assets: {},
+    gridOn: false, gridType: 'square', gridSize: 64, gridSub: 4, gridSpokes: 24, strokes: [] };
 }
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -81,6 +82,11 @@ export function normaliseDoc(raw) {
   if (['none', 'cold', 'hot', 'sketch', 'canvas'].includes(raw.paperType)) doc.paperType = raw.paperType;
   doc.paperScale = Math.max(0.5, Math.min(200, num(raw.paperScale, 6)));
   doc.paperStrength = Math.max(0, Math.min(1, num(raw.paperStrength, 0.6)));
+  doc.gridOn = !!raw.gridOn;
+  if (['square', 'dots', 'iso', 'polar'].includes(raw.gridType)) doc.gridType = raw.gridType;
+  doc.gridSize = Math.max(2, Math.min(2048, num(raw.gridSize, 64)));
+  doc.gridSub = Math.max(1, Math.min(16, Math.round(num(raw.gridSub, 4))));
+  doc.gridSpokes = Math.max(4, Math.min(96, Math.round(num(raw.gridSpokes, 24))));
   doc.assets = {};
   if (raw.assets && typeof raw.assets === 'object') for (const [k, v] of Object.entries(raw.assets)) if (typeof v === 'string' && v.startsWith('data:image/')) doc.assets[k] = v;
   if (Array.isArray(raw.layers) && raw.layers.length) {
@@ -134,6 +140,7 @@ export function serialise(doc) {
     format: FORMAT, version: FORMAT_VERSION, width: doc.width, height: doc.height, bg: doc.bg, light: doc.light,
     layers: doc.layers, activeLayer: doc.activeLayer, groups: doc.groups, blendEnds: doc.blendEnds !== false,
     paperType: doc.paperType || 'none', paperScale: doc.paperScale ?? 6, paperStrength: doc.paperStrength ?? 0.6,
+    gridOn: !!doc.gridOn, gridType: doc.gridType || 'square', gridSize: doc.gridSize ?? 64, gridSub: doc.gridSub ?? 4, gridSpokes: doc.gridSpokes ?? 24,
     // only the pictures a stroke still uses
     assets: Object.fromEntries(Object.entries(doc.assets || {}).filter(([k]) => doc.strokes.some((s) => s.style.stampImg === k))),
     strokes: doc.strokes.map((s) => ({

@@ -32,6 +32,7 @@ engine/
   bucket.js         paint bucket: flood fill, contour trace, keyhole polygon
   noise.js          seeded value noise for brush jitter and wobble
   tabs.js           phone layout: panel sections as tabs under the drawing
+  grid.js           drawing grid: overlay drawing and snap targets
   overlay.js        2D overlay: guides, selection, handles, width rings, marquee, snap marker
   document.js       document model (layers, groups), v1 migration, history
 ```
@@ -65,6 +66,10 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 **Frieze** (strip patterns): the 7 frieze groups, for borders and braids. p1 hop (translation), p11g step (glide), p1m1 sidle (mirrors across the strip), p11m jump (mirror along it), p2 spinning hop (half turns), p2mg spinning sidle and p2mm spinning jump. Set the **Repeat** length and the **Strip angle**; the guides show the centre line, the repeat lines, the mirrors and the half-turn centres. Crop to cell, recursion, the bucket and snapping all work with it.
 
 **Knot layer** (Layers panel): every strand in the layer, and all their symmetric copies, weave over and under each other Celtic-knot style, alternating at each crossing. Each stroke keeps one height profile for all its copies; crossings between strokes and copies are solved together (opposite heights at every crossing, alternation along every strand), and the layer's strands share one depth buffer drawn in three passes. Fills go underneath; washes, glows and draw-order strokes are drawn after, unwoven. The **Celtic band** and **Celtic cord** presets turn the active layer into a knot layer.
+
+## Drawing grid
+
+For regular drawing without symmetry (or with it). Tick **Grid** in the top bar (or press **#** or **'**); set the type in the Document panel: **Square**, **Dots**, **Isometric** (triangles) or **Polar** (rings and spokes), with the size, subdivisions and spokes. It is centred on the artboard, fades its minor lines when zoomed out, and is never rendered or exported. With **Snap** on, points snap to grid intersections first, then onto its lines; the grid settings are saved with the document.
 
 ## Recursion (per stroke)
 
@@ -220,6 +225,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.14.0**: Drawing grid (square, dots, isometric, polar), independent of the symmetry, for regular drawing; Snap snaps to its intersections and lines; never exported; toggle with the Grid checkbox or # / '.
 - **2.13.0**: Knot layers: Celtic-knot weaving across all the strands of a layer and their copies, with Celtic band and Celtic cord presets.
 
 - **2.12.0**: Wet watercolour: washes spread, gather pigment at the wet edge, granulate and bleed into each other (per layer, under its other strokes).
