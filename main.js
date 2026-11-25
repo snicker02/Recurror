@@ -2,7 +2,8 @@
 import { initPanelTabs } from './engine/tabs.js';
 import { floodRegion, traceRegion, keyhole } from './engine/bucket.js';
 import { Renderer } from './engine/renderer.js';
-import { drawOverlay, viewPoint } from './engine/overlay.js';
+import { drawOverlay, viewPoint, xformHandles } from './engine/overlay.js';
+import { similarity, transformStroke, transformPlacement, canRotate, snapshot, restore as restoreStroke } from './engine/transform.js';
 import {
   newDocument, makeStroke, touch, normaliseDoc, serialise, History,
   defaultStyle, defaultFill, defaultShape, defaultLayer, nextRev, newId, syncGroup,
@@ -14,7 +15,7 @@ import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.15.1';
+export const VERSION = '2.16.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -62,6 +63,9 @@ let cursor = null;
 let snapShow = null;
 let marquee = null;
 let drag = null;
+let xformHot = -1;                  // transform-box handle under the cursor
+let xboxMemo = { key: '', box: null };
+const COARSE = !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
 let spaceDown = false;
 let dirty = true;
 const pointers = new Map();
@@ -79,7 +83,7 @@ const MESH_ROOTS = new Set(['shape', 'style']);
 const HINTS = {
   draw: 'Draw: drag to sketch · tap to place connected points (Enter / double-tap / right-click finishes, tap the first point to close) · [ ] width · S snap',
   pen: 'Pen: click control points · Enter / double-click / right-click to finish · click the first point to close · Backspace removes last',
-  edit: 'Edit: click to select (Shift adds) · drag empty space to box-select · drag handles · Alt-click deletes a point · double-click inserts · Ctrl+G groups',
+  edit: 'Edit: click to select (Shift adds) · drag empty space to box-select · drag points · Alt- or right-click deletes a point · double-click inserts · box corners scale (Alt: from the opposite corner), knob rotates (Shift: 15° steps)',
   width: 'Width: drag outward from a control point to set its width · Alt-click resets it to 1',
   center: 'Centre: click or drag to place the symmetry centre (snaps to artboard landmarks when Snap is on)',
   pan: 'Pan: drag to move the view · wheel to zoom',
@@ -88,7 +92,7 @@ const HINTS = {
 const TOUCH_HINTS = {
   draw: 'Draw: drag to sketch · tap to place points, double-tap to finish · pinch to zoom',
   pen: 'Pen: tap control points · double-tap to finish · tap the first point to close',
-  edit: 'Edit: tap to select · drag empty space to box-select · drag handles · double-tap a stroke to insert a point',
+  edit: 'Edit: tap to select · drag points · long-press a point to delete it · double-tap a stroke to insert one · drag box corners to scale, the knob to rotate',
   width: 'Width: drag outward from a control point to set its width',
   center: 'Centre: tap or drag to place the symmetry centre',
   pan: 'Pan: drag to move · pinch to zoom',
@@ -236,7 +240,7 @@ function draw() {
     view, doc, guides: ui.showGuides ? guidesCached(activeSym(), activeRec(), activeWarp(), doc.width, doc.height) : null,
     showGuides: ui.showGuides, selection, primary, hover, handleHot, widthHot,
     penPoints: penPoints.map((p) => viewPointTpl(p)), penCloseHot, cursor, tool, brushWidth: tpl.style.width,
-    marquee, snap: snapShow, grid: gridOf(doc),
+    marquee, snap: snapShow, grid: gridOf(doc), xbox: tool === 'edit' ? xformBox() : null,
   });
 }
 
@@ -527,7 +531,7 @@ function setTool(t) {
   updateVisibility();
   if (t === 'bucket' && was !== 'bucket' && panelTabs && document.body.classList.contains('tabbed')) panelTabs.show($('#bucketSection'));
   for (const b of $$('#tools button')) b.classList.toggle('active', b.dataset.tool === t);
-  hover = null; handleHot = -1; widthHot = -1; snapShow = null;
+  hover = null; handleHot = -1; widthHot = -1; xformHot = -1; snapShow = null;
   updateCursorClass();
   $('#hint').textContent = HINTS[t] || '';
   dirty = true;
@@ -545,7 +549,10 @@ function updateCursorClass() {
   const t = effectiveTool();
   ovCanvas.className = '';
   if (t === 'pan') ovCanvas.classList.add(drag && drag.kind === 'pan' ? 'panning' : 'pan');
-  else if (t === 'edit') ovCanvas.classList.add(hover && handleHot < 0 ? 'move' : 'edit');
+  else if (t === 'edit') {
+    const xh = drag && drag.kind === 'xform' ? drag.handle : xformHot;
+    ovCanvas.classList.add(xh === 'rot' ? 'rotate' : xh === 0 || xh === 2 ? 'nwse' : xh === 1 || xh === 3 ? 'nesw' : hover && handleHot < 0 ? 'move' : 'edit');
+  }
   else if (t === 'width') ovCanvas.classList.add('width');
   else if (t === 'bucket') ovCanvas.classList.add('bucket');
 }
@@ -630,6 +637,125 @@ function hitTest(wx, wy, slopPx = 5) {
     }
   }
   return null;
+}
+
+// ---- selection transform (scale / rotate the selected strokes, copies and all) ----
+/** World bounding box of what the strokes draw (every copy; for lattice patterns just the motif). */
+function strokesBox(list) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of list) {
+    const sm = getSamples(s);
+    if (!sm.length) continue;
+    const step = Math.max(1, Math.floor(sm.length / 48));
+    const pts = [];
+    for (let i = 0; i < sm.length; i += step) pts.push(sm[i]);
+    pts.push(sm[sm.length - 1]);
+    let wmax = 1;
+    for (const p of s.points) wmax = Math.max(wmax, p.w ?? 1);
+    const hw = s.style.mode === 'none' ? 0 : s.style.width * 0.5 * wmax;
+    const lattice = s.sym.mode === 'wallpaper' || s.sym.mode === 'frieze';
+    const xs = lattice ? [{ mob: null }] : transformsFor(s.sym, s.rec, doc.width, doc.height, bound(s));
+    const cstep = Math.max(1, Math.floor(xs.length / 4000));
+    const b = bound(s);
+    for (let k = 0; k < xs.length; k += cstep) {
+      const m = xs[k].mob;
+      const sc = m ? mobScaleAt(m, b.x, b.y) : 1;
+      if (!(sc > 1e-3)) continue;
+      for (const p of pts) {
+        let q = m ? mobApply(m, p.x, p.y) : p;
+        if (warpActive(s.warp)) q = warpPoint(s.warp, +s.sym.cx, +s.sym.cy, q.x, q.y);
+        if (!Number.isFinite(q.x) || !Number.isFinite(q.y)) continue;
+        const r = hw * sc;
+        x0 = Math.min(x0, q.x - r); y0 = Math.min(y0, q.y - r); x1 = Math.max(x1, q.x + r); y1 = Math.max(y1, q.y + r);
+      }
+    }
+  }
+  return Number.isFinite(x0) ? { x0, y0, x1, y1 } : null;
+}
+function xformBox() {
+  if (!selection.length || (drag && drag.kind === 'marquee')) return null;
+  const key = selection.map((s) => s.id + ':' + s.rev).join('|');
+  if (xboxMemo.key !== key) xboxMemo = { key, box: strokesBox(selection) };
+  const b = xboxMemo.box;
+  if (!b) return null;
+  let label = '';
+  if (drag && drag.kind === 'xform') label = drag.rotate ? `${Math.round(drag.phi * 180 / Math.PI)}°` : `×${drag.k.toFixed(2)}`;
+  return { ...b, rot: canRotate(selection), hot: drag && drag.kind === 'xform' ? drag.handle : xformHot, coarse: COARSE, label };
+}
+/** Which transform handle is under the screen point: 0–3 corners, 'rot', or -1. */
+function xformHandleAt(sx, sy) {
+  const b = xformBox();
+  if (!b) return -1;
+  const h = xformHandles(b, (x) => x * view.zoom + view.panX, (y) => y * view.zoom + view.panY, COARSE);
+  const tol = h.size / 2 + (COARSE ? 8 : 4);
+  if (h.rot && Math.hypot(sx - h.rot[0], sy - h.rot[1]) <= tol) return 'rot';
+  for (let i = 0; i < 4; i++) if (Math.abs(sx - h.corners[i][0]) <= tol && Math.abs(sy - h.corners[i][1]) <= tol) return i;
+  return -1;
+}
+/** Groups shared by the strokes, so their symmetry moves with them. */
+function groupsOf(list) {
+  const ids = new Set(list.map((s) => s.group).filter(Boolean));
+  return doc.groups.filter((g) => ids.has(g.id));
+}
+function beginXform(handle, sx, sy) {
+  const b = xformBox();
+  const h = xformHandles(b, (x) => x * view.zoom + view.panX, (y) => y * view.zoom + view.panY, COARSE);
+  const [L, T, R, B] = h.box;
+  const centre = toWorld((L + R) / 2, (T + B) / 2);
+  const corner = handle === 'rot' ? null : toWorld(h.corners[handle][0], h.corners[handle][1]);
+  const opposite = handle === 'rot' ? null : toWorld(h.corners[(handle + 2) % 4][0], h.corners[(handle + 2) % 4][1]);
+  const strokes = selection.slice(), groups = groupsOf(strokes);
+  drag = {
+    kind: 'xform', handle, rotate: handle === 'rot', centre, corner, opposite, start: toWorld(sx, sy), k: 1, phi: 0, moved: false,
+    strokes, snaps: strokes.map(snapshot), groups, gsnaps: groups.map((g) => JSON.parse(JSON.stringify({ sym: g.sym, rec: g.rec, warp: g.warp }))),
+  };
+}
+function applySimilarity(strokes, S, groups = groupsOf(strokes)) {
+  for (const s of strokes) { transformStroke(s, S); touch(s); }
+  for (const g of groups) transformPlacement(g.sym, g.rec, g.warp, S);
+}
+function moveXform(w, e) {
+  const d = drag;
+  d.strokes.forEach((s, i) => restoreStroke(s, d.snaps[i]));
+  d.groups.forEach((g, i) => { Object.assign(g.sym, d.gsnaps[i].sym); Object.assign(g.rec, d.gsnaps[i].rec); Object.assign(g.warp, d.gsnaps[i].warp); });
+  let S;
+  if (d.rotate) {
+    let phi = Math.atan2(w.y - d.centre.y, w.x - d.centre.x) - Math.atan2(d.start.y - d.centre.y, d.start.x - d.centre.x);
+    phi = Math.atan2(Math.sin(phi), Math.cos(phi));
+    if (e.shiftKey) phi = Math.round(phi / (Math.PI / 12)) * (Math.PI / 12);
+    d.phi = phi;
+    S = similarity(d.centre, 1, phi);
+  } else {
+    const P = e.altKey ? d.opposite : d.centre;
+    const k0 = Math.hypot(d.corner.x - P.x, d.corner.y - P.y);
+    const k = Math.max(0.02, Math.min(50, Math.hypot(w.x - P.x, w.y - P.y) / Math.max(1e-6, k0)));
+    d.k = k;
+    S = similarity(P, k, 0);
+  }
+  applySimilarity(d.strokes, S, d.groups);
+  d.moved = true;
+}
+/** One-shot transforms for the panel buttons (selection, or the whole drawing when nothing is selected). */
+function xformTargets() { return selection.length ? selection.slice() : doc.strokes.filter(editable); }
+function xformApply(make) {
+  const list = xformTargets();
+  if (!list.length) { flashHint('Nothing to transform.'); return; }
+  const box = strokesBox(list);
+  if (!box) return;
+  const S = make(box, list);
+  if (!S) return;
+  applySimilarity(list, S);
+  // with nothing selected the whole drawing moved: new strokes keep to its symmetry
+  if (!selection.length) transformPlacement(tpl.sym, tpl.rec, tpl.warp, S);
+  else if (primary) loadTemplateFrom(primary);
+  commit(); refreshPanel(); dirty = true;
+}
+
+function deletePoint(h) {
+  handleHot = -1;
+  if (!primary) return;
+  if (primary.points.length <= 2) { flashHint('A stroke needs at least two points — delete the stroke instead.'); return; }
+  primary.points.splice(h, 1); touch(primary); commit(); dirty = true;
 }
 
 function handleAt(sx, sy) {
@@ -904,7 +1030,11 @@ function onPointerDown(e) {
   ovCanvas.setPointerCapture(e.pointerId);
 
   if (e.button === 1 || tool === 'pan') { drag = { kind: 'pan', sx, sy }; updateCursorClass(); e.preventDefault(); return; }
-  if (e.button === 2) { if ((tool === 'pen' || tool === 'draw') && penPoints.length) finishPen(false); return; }
+  if (e.button === 2) {
+    if ((tool === 'pen' || tool === 'draw') && penPoints.length) finishPen(false);
+    else if (tool === 'edit') { const h = handleAt(sx, sy); if (h >= 0) deletePoint(h); }
+    return;
+  }
 
   switch (tool) {
     case 'draw': if (canDrawHere()) beginDraw(w, e, sx, sy); break;
@@ -923,12 +1053,19 @@ function onPointerDown(e) {
       break;
     }
     case 'edit': {
+      const xh = xformHandleAt(sx, sy);
+      if (xh !== -1) { beginXform(xh, sx, sy); break; }
       const h = handleAt(sx, sy);
       if (h >= 0) {
-        if (e.altKey) {
-          if (primary.points.length > 2) { primary.points.splice(h, 1); touch(primary); commit(); }
-          handleHot = -1;
-        } else drag = { kind: 'handle', idx: h, moved: false };
+        if (e.altKey) deletePoint(h);
+        else {
+          drag = { kind: 'handle', idx: h, moved: false, s0: { sx, sy }, touch: e.pointerType === 'touch', live: e.pointerType !== 'touch' };
+          // touch: hold still on a point to delete it
+          if (drag.touch) {
+            const d = drag;
+            d.lp = setTimeout(() => { if (drag === d && !d.live) { drag = null; deletePoint(h); if (navigator.vibrate) navigator.vibrate(15); } }, 550);
+          }
+        }
         break;
       }
       const hit = hitTest(w.x, w.y);
@@ -994,7 +1131,12 @@ function onPointerMove(e) {
         for (const ce of (evs.length ? evs : [e])) { const p = screenPos(ce); extendDraw(toWorld(p.sx, p.sy), ce); }
         break;
       }
+      case 'xform': moveXform(w, e); break;
       case 'handle': {
+        if (!drag.live) {
+          if (Math.hypot(sx - drag.s0.sx, sy - drag.s0.sy) < 8) break;   // a resting finger: no jitter, long-press still possible
+          drag.live = true; clearTimeout(drag.lp);
+        }
         const p = primary.points[drag.idx];
         const sw = snapWorld(w.x, w.y);
         const l = unwarp(primary.warp, primary.sym, sw.x, sw.y, p);
@@ -1040,6 +1182,8 @@ function onPointerMove(e) {
     const now = performance.now();
     if (h < 0 && now - (onPointerMove.lastHit || 0) < 40) { dirty = true; return; }
     onPointerMove.lastHit = now;
+    const xh = xformHandleAt(sx, sy);
+    if (xh !== xformHot) { xformHot = xh; updateCursorClass(); }
     const hv = h >= 0 ? primary : (hitTest(w.x, w.y) || {}).stroke || null;
     if (h !== handleHot || hv !== hover) { handleHot = h; hover = hv; updateCursorClass(); }
   } else if (tool === 'width') {
@@ -1088,7 +1232,9 @@ function onPointerUp(e) {
       } else endDraw();
       break;
     }
-    case 'handle': case 'move': case 'width': if (drag.moved) commit(); drag = null; break;
+    case 'handle': clearTimeout(drag.lp); if (drag.moved) commit(); drag = null; break;
+    case 'move': case 'width': if (drag.moved) commit(); drag = null; break;
+    case 'xform': if (drag.moved) { commit(); if (primary) loadTemplateFrom(primary); refreshPanel(); } drag = null; break;
     case 'center': commit(); drag = null; break;
     case 'marquee': {
       const d = drag; drag = null; marquee = null;
@@ -1281,6 +1427,23 @@ const actions = {
   },
   raise() { moveSel(1); },
   lower() { moveSel(-1); },
+  xfFit() {
+    xformApply((box) => {
+      const bw = box.x1 - box.x0, bh = box.y1 - box.y0;
+      if (!(bw > 0 && bh > 0)) return null;
+      const k = Math.min(doc.width * 0.9 / bw, doc.height * 0.9 / bh);
+      const c = { x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 };
+      return similarity(c, k, 0, { x: doc.width / 2 - c.x, y: doc.height / 2 - c.y });
+    });
+  },
+  xfGrow() { xformApply((box) => similarity({ x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 }, 1.25, 0)); },
+  xfShrink() { xformApply((box) => similarity({ x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 }, 0.8, 0)); },
+  xfRotate() {
+    xformApply((box, list) => {
+      if (!canRotate(list)) { flashHint('Wallpaper patterns and non-radial warps can’t be rotated exactly; scale them instead.'); return null; }
+      return similarity({ x: (box.x0 + box.x1) / 2, y: (box.y0 + box.y1) / 2 }, 1, Math.PI / 2);
+    });
+  },
   del() {
     if (!selection.length) return;
     doc.strokes = doc.strokes.filter((s) => !selection.includes(s));
@@ -1719,6 +1882,7 @@ function boot() {
     get selection() { return selection; }, select: (ids) => setSelection(doc.strokes.filter((s) => ids.includes(s.id)), null),
     get stats() { return renderer && renderer.stats; },
     get renderer() { return renderer; },
+    get xbox() { return xformBox(); }, get xboxHandles() { const b = xformBox(); return b ? xformHandles(b, (x) => x * view.zoom + view.panX, (y) => y * view.zoom + view.panY, COARSE) : null; },
     redraw: () => { dirty = true; draw(); },
   };
 }

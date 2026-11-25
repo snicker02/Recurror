@@ -385,6 +385,13 @@
         <button data-act="resetWidths" title="Set every control point's width back to 1">Reset widths</button>
         <button data-act="del" class="danger" title="Delete">Delete</button>
       </div>
+      <div class="btns">
+        <button data-act="xfFit" title="Scale and centre the selection (or the whole drawing when nothing is selected) to fill the artboard, copies included">Fit to artboard</button>
+        <button data-act="xfGrow" title="Enlarge by 25% about its centre (selection, or everything)">Enlarge</button>
+        <button data-act="xfShrink" title="Shrink by 20% about its centre (selection, or everything)">Shrink</button>
+        <button data-act="xfRotate" title="Rotate a quarter turn about its centre (selection, or everything)">Rotate 90°</button>
+      </div>
+      <p class="hint">In Edit, drag the orange box corners to scale (Alt: from the opposite corner) and the knob to rotate (Shift: 15° steps). Widths, symmetry, recursion and warp scale with it.</p>
       <div class="row"><label>Move to layer</label><select id="moveLayer"></select></div>
       <p class="hint" id="selInfo"></p>
     </details>

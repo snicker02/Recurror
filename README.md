@@ -67,6 +67,12 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 
 **Knot layer** (Layers panel): every strand in the layer, and all their symmetric copies, weave over and under each other Celtic-knot style, alternating at each crossing. Each stroke keeps one height profile for all its copies; crossings between strokes and copies are solved together (opposite heights at every crossing, alternation along every strand), and the layer's strands share one depth buffer drawn in three passes. Fills go underneath; washes, glows and draw-order strokes are drawn after, unwoven. The **Celtic band** and **Celtic cord** presets turn the active layer into a knot layer. With End shading on (the Tangle presets), each strand also gets the same graphite where it passes under another, starting at the edge of the strand on top and fading over the Shade length, so the knot reads in 3D; **Under shading** scales it (0 = off).
 
+## Scaling, rotating and fitting a drawing
+
+In **Edit**, the selection gets an orange box around everything it draws, copies included. Drag a **corner** to scale it about the box centre (hold **Alt** to scale from the opposite corner). Drag the **round knob** above it to rotate (hold **Shift** for 15° steps). The **Selection** panel has **Fit to artboard** (scale and centre to fill 90% of the page), **Enlarge** (×1.25), **Shrink** (×0.8) and **Rotate 90°**; with nothing selected they act on the whole drawing. Everything that shapes the copies goes with the strokes: symmetry centre and angle, wallpaper tile, frieze repeat, hyperbolic disc, inversion circles, recursion offset and angle, warp scale, and the stroke's lengths (width, dashes, jitter, ink, wet spread, pattern scale), so the drawing looks the same, only bigger, smaller or turned. Wallpaper lattices have no orientation and some warps (waves, sinusoidal, cylinder, horseshoe, power) aren't rotation-symmetric, so those can be scaled but not rotated.
+
+**Deleting a point:** in Edit, right-click it or Alt-click it; on a touch screen, long-press it. A stroke keeps at least two points.
+
 ## Drawing grid
 
 For regular drawing without symmetry (or with it). Tick **Grid** in the top bar (or press **#** or **'**); set the type in the Document panel: **Square**, **Dots**, **Isometric** (triangles) or **Polar** (rings and spokes), with the size, subdivisions and spokes. It is centred on the artboard, fades its minor lines when zoomed out, and is never rendered or exported. With **Snap** on, points snap to grid intersections first, then onto its lines; the grid settings are saved with the document.
@@ -225,6 +231,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.16.0**: Selection transform: in Edit, an orange box around the selection (all copies). Drag its corners to scale (Alt: from the opposite corner) and its knob to rotate (Shift: 15° steps). Selection panel: Fit to artboard, Enlarge, Shrink, Rotate 90° (on the whole drawing when nothing is selected). Symmetry, recursion, warp and stroke widths transform with it. Points: right-click (or Alt-click) deletes; on touch, long-press.
 - **2.15.1**: Knot fix: no more outline breaks at shallow or crowded crossings. Each strand's height now follows each crossing's slanted footprint (arc length and lateral position), not arc length alone.
 - **2.15.0**: Knot layers with tangle shading now shade each strand where it passes under another, from the edge of the strand on top (following slanted crossings), for a faux 3D look. Under shading slider (× End shading).
 - **2.14.0**: Drawing grid (square, dots, isometric, polar), independent of the symmetry, for regular drawing; Snap snaps to its intersections and lines; never exported; toggle with the Grid checkbox or # / '.

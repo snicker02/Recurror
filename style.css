@@ -60,6 +60,9 @@ label.inline { display: flex; align-items: center; gap: 5px; color: var(--dim); 
 #overlay.panning { cursor: grabbing; }
 #overlay.edit { cursor: default; }
 #overlay.move { cursor: move; }
+#overlay.nwse { cursor: nwse-resize; }
+#overlay.nesw { cursor: nesw-resize; }
+#overlay.rotate { cursor: grab; }
 #overlay.bucket { cursor: cell; }
 #glError {
   position: absolute; inset: 0; display: grid; place-items: center; padding: 40px;
