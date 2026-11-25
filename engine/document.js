@@ -22,7 +22,7 @@ export function defaultStyle() {
     // mode-specific
     strands: 3, rough: 0.5, outline: 0.3, stitchSpacing: 14, stitchSlant: 0.6,
     // graphite shading + ink outline (any mode)
-    shadeEnds: 0, shadeLen: 1.5, shadeWhich: 'both', shadeEdge: 0, shadeSide: 0, shadeGrain: 0.35, shadeCol: '#262626',
+    shadeEnds: 0, shadeUnder: 1, shadeLen: 1.5, shadeWhich: 'both', shadeEdge: 0, shadeSide: 0, shadeGrain: 0.35, shadeCol: '#262626',
     ink: 0, inkCol: '#000000',
     // realistic media: ink pooling, paper tooth, bristle brush, stamp brush
     pool: 0, tooth: 0.5,
