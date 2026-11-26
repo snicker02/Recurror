@@ -231,6 +231,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.17.0**: **⇄ Shelf** in the top bar sends the artboard to other snicker02 apps (shared image shelf).
 - **2.16.0**: Selection transform: in Edit, an orange box around the selection (all copies). Drag its corners to scale (Alt: from the opposite corner) and its knob to rotate (Shift: 15° steps). Selection panel: Fit to artboard, Enlarge, Shrink, Rotate 90° (on the whole drawing when nothing is selected). Symmetry, recursion, warp and stroke widths transform with it. Points: right-click (or Alt-click) deletes; on touch, long-press.
 - **2.15.1**: Knot fix: no more outline breaks at shallow or crowded crossings. Each strand's height now follows each crossing's slanted footprint (arc length and lateral position), not arc length alone.
 - **2.15.0**: Knot layers with tangle shading now shade each strand where it passes under another, from the edge of the strand on top (following slanted crossings), for a faux 3D look. Under shading slider (× End shading).
@@ -314,3 +315,12 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 ---
 
 Created with help from Claude AI
+
+## Shared image shelf
+
+The **⇄ Shelf** button opens the image shelf shared by all apps on [snicker02.github.io](https://snicker02.github.io/#shelf). It stores images in this browser only (IndexedDB), and every app on the site can read the same shelf.
+
+- **Save current** puts the current view on the shelf.
+- **Send to ↗** opens another app in a new tab with the image already loaded.
+
+The shelf code lives in [`snicker02.github.io/shared/bridge.js`](https://github.com/snicker02/snicker02.github.io/blob/main/shared/bridge.js). If it can't load (for example when you're offline), the app works as before and the button is hidden.

@@ -35,6 +35,7 @@
     </label>
     <label class="inline"><input type="checkbox" data-bind="ui.transparent"> Transparent</label>
     <button data-act="export" class="primary" title="Export PNG (Ctrl+E)">Export PNG</button>
+    <button id="shelfBtn" title="Shared image shelf: send this drawing to another snicker02 app">⇄ Shelf</button>
   </div>
   <input type="file" id="fileInput" accept=".json,application/json" hidden>
 </header>
@@ -414,6 +415,7 @@
   <span class="credit">Created with help from Claude AI</span>
 </footer>
 
+<script src="https://snicker02.github.io/shared/bridge.js"></script>
 <script type="module" src="main.js"></script>
 </body>
 </html>
