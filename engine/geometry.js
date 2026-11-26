@@ -4,7 +4,13 @@ import { strokeNoise, seedOf } from './noise.js';
 
 // Stroke vertex layout (floats):
 //   a_pos(2) a_ext(2) a_vc(2) a_tan(2) a_hw(1) a_along(2)  = 11
-export const STROKE_STRIDE = 13;   // … along(2) | ink(2): slowness of the pen, sharpness of the turn
+//   a_ink(2): slowness of the pen, sharpness of the turn
+//   a_clip(4): two half-planes (c0 + c1·e ≥ 0 keeps the pixel, e = drawn half width) that cut the
+//              legs of a sharp corner along its bisector
+export const STROKE_STRIDE = 17;
+const NO_CLIP = 1e7;
+// a polyline corner sharper than this is built as two legs meeting on the bisector (exact miter)
+const SHARP_TURN = 20 * Math.PI / 180, MITER_LIMIT = 4;
 
 const sampleCache = new Map();
 
@@ -149,6 +155,25 @@ export function buildStrokeMesh(stroke, join = null) {
     }
   }
 
+  const ringS = closed && n > 2;
+  // Sharp corners (polyline vertices): the shared miter vertex would fold the inner edge and bend
+  // the lateral coordinate (inked notches, edge-shading seams). Instead each leg runs straight to the
+  // corner and on to the miter tip, and is cut along the bisector; the legs tile the corner exactly.
+  const nibR0 = Math.max(0.03, Math.min(1, stroke.style.nibRatio ?? 1));
+  const sharp = new Array(m).fill(null);
+  if (n > 2 && nibR0 >= 1) for (let i = ringS ? 0 : 1; i < (ringS ? m : m - 1); i++) {
+    const p = S[(i - 1 + m) % m], c = S[i], q = S[(i + 1) % m];
+    let ix = c.x - p.x, iy = c.y - p.y, ox = q.x - c.x, oy = q.y - c.y;
+    const il = Math.hypot(ix, iy), ol = Math.hypot(ox, oy);
+    if (il < 1e-6 || ol < 1e-6) continue;
+    ix /= il; iy /= il; ox /= ol; oy /= ol;
+    const th = Math.acos(Math.max(-1, Math.min(1, ix * ox + iy * oy)));
+    if (th < SHARP_TURN) continue;
+    let bx = ix + ox, by = iy + oy;
+    const bl = Math.hypot(bx, by);
+    if (bl < 1e-6) { bx = -iy; by = ix; } else { bx /= bl; by /= bl; }
+    sharp[i] = { ix, iy, ox, oy, bx, by, th, ext: Math.min(MITER_LIMIT, Math.tan(th / 2)) * 1.02 + 0.02 };
+  }
   // tangents & miters
   const tx = new Float32Array(m), ty = new Float32Array(m);
   const mx = new Float32Array(m), my = new Float32Array(m);
@@ -158,6 +183,8 @@ export function buildStrokeMesh(stroke, join = null) {
   const ringM = closed && n > 2;
   const at = (j) => (ringM ? S[((j % m) + m) % m] : S[Math.max(0, Math.min(m - 1, j))]);
   for (let i = 0; i < m; i++) {
+    // a sharp corner is built from straight legs; the bend estimate must not reach across it
+    if (sharp[i] || (ringM || i > 0) && sharp[(i - 1 + m) % m] || (ringM || i < m - 1) && sharp[(i + 1) % m]) continue;
     const a = at(i - 2), b = S[i], c = at(i + 2);
     const cr = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
     if (Math.abs(cr) < 1e-9) continue;
@@ -208,21 +235,47 @@ export function buildStrokeMesh(stroke, join = null) {
   const capS = roundCaps && !(join && join.s && smoothJoin);
   const capE = roundCaps && !(join && join.e && smoothJoin);
   const capCount = n === 1 && !ring && stroke.style.cap !== 'butt' ? 2 : (capS ? 1 : 0) + (capE ? 1 : 0);
-  const vertCount = segs * 6 + capCount * 6;
+
+  const nSharp = sharp.filter(Boolean).length;
+  // Each corner's bisector cuts every segment within reach of it: the legs overlap on the inside of
+  // the bend for hw·tan(θ/2) along each leg (several samples on a finely sampled polyline).
+  const reachOf = (i) => hw[i] * (Math.min(50, Math.tan(sharp[i].th / 2)) * 1.05 + 1);
+  const Tlen = cum[ringS ? m : m - 1] || 0;
+  const nextSharp = new Int32Array(m).fill(-1), prevSharp = new Int32Array(m).fill(-1);
+  if (nSharp) {
+    let last = -1;
+    for (let pass = 0; pass < (ringS ? 2 : 1); pass++) for (let i = m - 1; i >= 0; i--) { if (sharp[i]) last = i; if (nextSharp[i] < 0) nextSharp[i] = last; }
+    last = -1;
+    for (let pass = 0; pass < (ringS ? 2 : 1); pass++) for (let i = 0; i < m; i++) { if (sharp[i]) last = i; if (prevSharp[i] < 0) prevSharp[i] = last; }
+  }
+  const arc = (from, to) => { let d = cum[to] - cum[from]; if (ringS && d < 0) d += Tlen; return d; };
+  const vertCount = segs * 6 + capCount * 6 + nSharp * 12;
   const data = new Float32Array(vertCount * STROKE_STRIDE);
   let o = 0;
   const totalLen = Math.max(total, 1e-6);
 
-  const put = (i, side, capC, extX, extY, uOverride) => {
-    const s = S[i];
-    const len = uOverride !== undefined ? uOverride : cum[i];
-    data[o++] = s.x; data[o++] = s.y;
+  // clip half-planes for a vertex at (px, py) + ext·e: keep where sgn·dot(p − c, B) ≥ 0
+  let clipA = null, clipB = null;
+  const clipOf = (cl, px, py, ex, ey) => {
+    if (!cl) return [NO_CLIP, 0];
+    const c = S[cl.i], k = cl.sgn;
+    return [k * ((px - c.x) * cl.bx + (py - c.y) * cl.by), k * (ex * cl.bx + ey * cl.by)];
+  };
+  const putRaw = (px, py, extX, extY, side, capC, tX, tY, h, len, sl, tu) => {
+    data[o++] = px; data[o++] = py;
     data[o++] = extX; data[o++] = extY;
     data[o++] = side; data[o++] = capC;
-    data[o++] = tx[i]; data[o++] = ty[i];
-    data[o++] = hw[i];
+    data[o++] = tX; data[o++] = tY;
+    data[o++] = h;
     data[o++] = len / totalLen; data[o++] = len;
-    data[o++] = slow[i]; data[o++] = turn[i];
+    data[o++] = sl; data[o++] = tu;
+    const a = clipOf(clipA, px, py, extX, extY), b = clipOf(clipB, px, py, extX, extY);
+    data[o++] = a[0]; data[o++] = a[1]; data[o++] = b[0]; data[o++] = b[1];
+  };
+  const put = (i, side, capC, extX, extY, uOverride, tX = tx[i], tY = ty[i]) => {
+    const s = S[i];
+    const len = uOverride !== undefined ? uOverride : cum[i];
+    putRaw(s.x, s.y, extX, extY, side, capC, tX, tY, hw[i], len, slow[i], turn[i]);
   };
   // calligraphy nib: each side is offset along the fixed nib (normal + (cos/f)·tangent), giving the
   // slanted swept-pen envelope; the perpendicular reach stays exactly hw, so edge anti-aliasing holds
@@ -245,9 +298,43 @@ export function buildStrokeMesh(stroke, join = null) {
     const a = k, b = (k + 1) % m;
     const la = cum[a];
     const lb = (ring && b === 0) ? cum[m] : cum[b];
-    body(a, -1, la); body(a, 1, la); body(b, 1, lb);
-    body(a, -1, la); body(b, 1, lb); body(b, -1, lb);
+    if (!sharp[a] && !sharp[b]) {
+      // within reach of a corner on either side: keep to its side of the bisector
+      const j = nextSharp[b], i = prevSharp[a];
+      clipB = j >= 0 && arc(b, j) <= reachOf(j) ? { i: j, bx: sharp[j].bx, by: sharp[j].by, sgn: -1 } : null;
+      clipA = i >= 0 && arc(i, a) <= reachOf(i) ? { i, bx: sharp[i].bx, by: sharp[i].by, sgn: 1 } : null;
+      body(a, -1, la); body(a, 1, la); body(b, 1, lb);
+      body(a, -1, la); body(b, 1, lb); body(b, -1, lb);
+      continue;
+    }
+    // a leg of a sharp corner: square to the segment at that end, cut on the corner's bisector
+    let sx = S[b].x - S[a].x, sy = S[b].y - S[a].y;
+    const sl = Math.hypot(sx, sy) || 1; sx /= sl; sy /= sl;
+    const nx = -sy, ny = sx;
+    {
+      const i = sharp[a] ? a : prevSharp[a], j = sharp[b] ? b : nextSharp[b];
+      clipA = i >= 0 && (i === a || arc(i, a) <= reachOf(i)) ? { i, bx: sharp[i].bx, by: sharp[i].by, sgn: 1 } : null;
+      clipB = j >= 0 && (j === b || arc(b, j) <= reachOf(j)) ? { i: j, bx: sharp[j].bx, by: sharp[j].by, sgn: -1 } : null;
+    }
+    const end = (i, side, len) => sharp[i] ? put(i, side, 0, nx * side, ny * side, len, sx, sy) : body(i, side, len);
+    end(a, -1, la); end(a, 1, la); end(b, 1, lb);
+    end(a, -1, la); end(b, 1, lb); end(b, -1, lb);
   }
+  // the legs carry on past each sharp corner to its miter tip (each keeps its own side of the bisector)
+  for (let i = 0; i < m; i++) {
+    const c = sharp[i];
+    if (!c) continue;
+    const len = i === 0 && ring ? cum[m] : cum[i];
+    for (const [dx, dy, sgn, l2] of [[c.ix, c.iy, -1, len], [-c.ox, -c.oy, 1, i === 0 && ring ? 0 : cum[i]]]) {
+      const tX = sgn < 0 ? c.ix : c.ox, tY = sgn < 0 ? c.iy : c.oy, nx = -tY, ny = tX;
+      const E = c.ext * hw[i];
+      clipA = { i, bx: c.bx, by: c.by, sgn }; clipB = null;
+      const v = (side, far) => putRaw(S[i].x + (far ? dx * E : 0), S[i].y + (far ? dy * E : 0), nx * side, ny * side, side, 0, tX, tY, hw[i], l2, slow[i], turn[i]);
+      v(-1, 0); v(1, 0); v(1, 1);
+      v(-1, 0); v(1, 1); v(-1, 1);
+    }
+  }
+  clipA = clipB = null;
 
   if (capCount) {
     const cap = (i, dir) => {

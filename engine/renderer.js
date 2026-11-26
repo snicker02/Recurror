@@ -103,7 +103,9 @@ export class Renderer {
     const gl = canvas.getContext('webgl', { antialias: false, stencil: false, depth: false, alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: false });
     if (!gl) throw new Error('WebGL is not available in this browser.');
     this.gl = gl;
-    this.progStroke = program(gl, strokeVS, strokeFS);
+    // per-pixel depth (EXT_frag_depth) lets a stroke's self-overlaps merge cleanly; without it they render as before
+    this.fragDepth = !!gl.getExtension('EXT_frag_depth');
+    this.progStroke = program(gl, strokeVS, this.fragDepth ? '#extension GL_EXT_frag_depth : enable\n#define FRAG_DEPTH 1\n' + strokeFS : strokeFS);
     this.progFill = program(gl, fillVS, fillFS);
     this.progComp = program(gl, quadVS, compFS);
     this.progBlit = program(gl, quadVS, blitFS);
@@ -773,7 +775,7 @@ export class Renderer {
 
     this.uploadInstances(xs);
     const A = P.att, B = STROKE_STRIDE * 4;
-    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along, A.a_ink].concat(weaving ? [A.a_weave] : []),
+    this.setAttribs([A.a_pos, A.a_ext, A.a_vc, A.a_tan, A.a_hw, A.a_along, A.a_ink, A.a_clip].concat(weaving ? [A.a_weave] : []),
       this.inst ? [A.i_mA, A.i_mB, A.i_conj, A.i_idx] : []);
     gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
     gl.vertexAttribPointer(A.a_pos, 2, gl.FLOAT, false, B, 0);
@@ -783,6 +785,7 @@ export class Renderer {
     gl.vertexAttribPointer(A.a_hw, 1, gl.FLOAT, false, B, 32);
     gl.vertexAttribPointer(A.a_along, 2, gl.FLOAT, false, B, 36);
     gl.vertexAttribPointer(A.a_ink, 2, gl.FLOAT, false, B, 44);
+    gl.vertexAttribPointer(A.a_clip, 4, gl.FLOAT, false, B, 52);
     if (A.a_weave !== undefined && A.a_weave >= 0) {
       if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 2, gl.FLOAT, false, 0, 0); }
       else gl.vertexAttrib2f(A.a_weave, 0, 1e4);
@@ -886,6 +889,11 @@ export class Renderer {
         const z = zFor(L);
         gl.uniform1f(P.uni.u_zOff, z[0]);
         gl.uniform1f(P.uni.u_zScale, z[1]);
+        // union term in window depth: knot 0.45 (h ±1 → ±0.45, over/under 0.9 apart); plain strokes
+        // ≈ the arc-length depth of 6 half-widths, so only near-by parts of the stroke merge
+        const uz = !ordered || soft ? 0 : knotted ? 0.5 * Math.abs(z[1]) * 0.45
+          : 0.5 * Math.abs(z[1]) * Math.min(0.3, 0.6 * 2 * 6 * Math.max(0.25, (+st.width || 18) * 0.5) / own);
+        gl.uniform1f(P.uni.u_unionZ, uz);
         gl.uniform3f(P.uni.u_colA, lk.a[0], lk.a[1], lk.a[2]);
         gl.uniform3f(P.uni.u_colB, lk.b[0], lk.b[1], lk.b[2]);
         gl.uniform1f(P.uni.u_opacity, lk.o);

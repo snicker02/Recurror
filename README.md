@@ -231,6 +231,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.16.1**: Clean sharp corners. A polyline corner sharper than 20° is now two straight legs meeting exactly on the bisector, with a true miter tip, so no ink notch, edge-shading seam or folded inner edge shows. Where a stroke overlaps itself (tight loops), the part nearer its centre line wins per pixel, so the overlap reads as one shape (EXT_frag_depth; without it, as before).
 - **2.16.0**: Selection transform: in Edit, an orange box around the selection (all copies). Drag its corners to scale (Alt: from the opposite corner) and its knob to rotate (Shift: 15° steps). Selection panel: Fit to artboard, Enlarge, Shrink, Rotate 90° (on the whole drawing when nothing is selected). Symmetry, recursion, warp and stroke widths transform with it. Points: right-click (or Alt-click) deletes; on touch, long-press.
 - **2.15.1**: Knot fix: no more outline breaks at shallow or crowded crossings. Each strand's height now follows each crossing's slanted footprint (arc length and lateral position), not arc length alone.
 - **2.15.0**: Knot layers with tangle shading now shade each strand where it passes under another, from the edge of the strand on top (following slanted crossings), for a faux 3D look. Under shading slider (× End shading).
