@@ -88,6 +88,8 @@ attribute vec2 a_vc;
 attribute vec2 a_tan;
 attribute float a_hw;
 attribute vec2 a_along;
+attribute vec4 a_clip;        // sharp-corner legs: two half-planes, (c0, c1) each; keep where c0 + c1·e ≥ 0
+varying vec2 v_clip;
 attribute vec2 a_weave;       // (weave height, distance to the edge of a strand passing over)
 attribute vec2 a_ink;         // (slowness of the pen, sharpness of the turn)
 
@@ -119,9 +121,11 @@ void main() {
   float e = a_hw + pad;
   vec2 p = warpP(w0) + J * (a_ext * e);
   vec3 c = u_view * vec3(p, 1.0);
-  float zv = u_weaveOn > 0.5 ? (-0.9 * a_weave.x + 0.05 * (1.0 - 2.0 * a_along.x)) : (1.0 - 2.0 * a_along.x);
+  // depth ranges leave headroom for the per-pixel centre-distance term (u_unionZ) added in the fragment shader
+  float zv = u_weaveOn > 0.5 ? 0.5 * (-0.9 * a_weave.x + 0.05 * (1.0 - 2.0 * a_along.x)) : 0.6 * (1.0 - 2.0 * a_along.x);
   gl_Position = vec4(c.xy, u_softZ > 0.5 ? 0.999 - 1.998 * i_idx : u_zOff + u_zScale * zv, 1.0);
   v_dc = a_vc * e;
+  v_clip = a_clip.xz + a_clip.yw * e;
   v_cl = a_pos + a_ext * e;
   v_ink = a_ink;
   v_wp = p;
@@ -160,6 +164,8 @@ uniform float u_lines;
 uniform float u_bevel;
 uniform float u_glow;
 uniform float u_pass;       // 0 = plain, 1 = fully covered pixels only, 2 = AA fringe only
+uniform float u_unionZ;     // depth added per unit distance from the centre line (0 = off)
+varying vec2 v_clip;        // sharp-corner leg clip (see the vertex shader)
 uniform vec4 u_chain;       // (offset, own length, chain length, reversed) — touching strokes share one gradient
 uniform vec2 u_join;        // (start linked, end linked): linked caps shade as tube continuation
 uniform float u_loop;       // 1 = the line closes on itself: mirror the along-gradient so it has no seam
@@ -296,6 +302,9 @@ void main() {
   if (cropped(v_cl)) discard;
   float hw = max(v_hw, 1e-4);
   float aa = max(v_pad, 1e-5);
+  // the other leg of a sharp corner owns the far side of the bisector; each leg reaches half a pixel
+  // over it, so no pixel centre on the cut is left to neither (the two sides match there)
+  if (min(v_clip.x, v_clip.y) < -0.5 * aa) discard;
   float r = length(v_dc);
   float edge = clamp((hw - r) / aa + 0.5, 0.0, 1.0);          // coverage keeps the round cap outline
   // a cap at a linked end is shaded as if the tube carried straight on (no dome at the join)
@@ -567,6 +576,13 @@ void main() {
     else if (interior) discard;
   }
   a *= u_opacity;
+#ifdef FRAG_DEPTH
+  // Where a stroke overlaps itself (the inside of a sharp corner, a tight loop), the part whose
+  // centre line is nearer wins the depth test, so the overlap reads as one union: no inner edge,
+  // ink line or AA seam of one part shows across another. Kept below the knot over/under gap and
+  // within a few widths of arc length on plain strokes, so real crossings keep their order.
+  gl_FragDepthEXT = gl_FragCoord.z + u_unionZ * clamp(r / hw, 0.0, 1.0);
+#endif
   gl_FragColor = vec4(col * a, a);
 }
 `;
