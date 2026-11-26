@@ -229,13 +229,15 @@ export class Renderer {
     const key = 'knot|' + knot.key;
     if (m.weaveKey === key) return;
     const W = knot.sol.get(stroke.id);
-    // (height, distance along the strand to the edge of a strand passing over it)
-    const h = new Float32Array(m.count * 2), D = m.data;
+    // (height, distance to the edge of a strand passing over it, … of a strand it passes over);
+    // a reflected copy is drawn with negated height and so takes its shading from the latter
+    const h = new Float32Array(m.count * 3), D = m.data;
     for (let i = 0; i < m.count; i++) {
       const o = i * STROKE_STRIDE, sArc = D[o + 10];
       const x = (D[o + 2] * -D[o + 7] + D[o + 3] * D[o + 6]) * D[o + 8];   // lateral offset: ext · N
-      h[2 * i] = W.heightAtX(sArc, x);
-      h[2 * i + 1] = W.underAt(sArc, x);
+      h[3 * i] = W.heightAtX(sArc, x);
+      h[3 * i + 1] = W.underAt(sArc, x);
+      h[3 * i + 2] = W.overAt(sArc, x);
     }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo);
@@ -269,8 +271,8 @@ export class Renderer {
     const key = xs.key + '|' + (st.weaveFlip ? 1 : 0);
     if (m.weaveKey === key) return m.weaveInfo;
     const W = solveWeave(getSamples(stroke), isClosed(stroke), xs, m.maxHw, !!st.weaveFlip);
-    const h = new Float32Array(m.count * 2);
-    for (let i = 0; i < m.count; i++) { h[2 * i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]); h[2 * i + 1] = 1e4; }
+    const h = new Float32Array(m.count * 3);
+    for (let i = 0; i < m.count; i++) { h[3 * i] = W.heightAt(m.data[i * STROKE_STRIDE + 10]); h[3 * i + 1] = 1e4; h[3 * i + 2] = 1e4; }
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo);
     gl.bufferData(gl.ARRAY_BUFFER, h, gl.STATIC_DRAW);
@@ -787,8 +789,8 @@ export class Renderer {
     gl.vertexAttribPointer(A.a_ink, 2, gl.FLOAT, false, B, 44);
     gl.vertexAttribPointer(A.a_clip, 4, gl.FLOAT, false, B, 52);
     if (A.a_weave !== undefined && A.a_weave >= 0) {
-      if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 2, gl.FLOAT, false, 0, 0); }
-      else gl.vertexAttrib2f(A.a_weave, 0, 1e4);
+      if (weaving) { gl.bindBuffer(gl.ARRAY_BUFFER, m.weaveVbo); gl.vertexAttribPointer(A.a_weave, 3, gl.FLOAT, false, 0, 0); }
+      else gl.vertexAttrib3f(A.a_weave, 0, 1e4, 1e4);
     }
     const looks = levelLooks(st.colA, st.colB, st.opacity, rec, levels);
     gl.uniformMatrix3fv(P.uni.u_view, false, o.viewMat);
