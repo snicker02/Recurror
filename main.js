@@ -15,7 +15,7 @@ import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.16.0';
+export const VERSION = '2.17.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -1838,6 +1838,22 @@ function boot() {
   ovCanvas.tabIndex = 0;
   bindPanel();
   for (const b of $$('[data-act]')) b.addEventListener('click', () => actions[b.dataset.act] && actions[b.dataset.act]());
+  // shared image shelf (snicker02.github.io/shared/bridge.js): sends the artboard at 1×, like Export PNG
+  if (window.SnickerShelf) {
+    window.SnickerShelf.mount({
+      app: 'Recurror',
+      button: $('#shelfBtn'),
+      getImage: () => {
+        if (!renderer) throw new Error('renderer not ready');
+        const c = renderer.exportCanvas(doc, 1, ui.transparent);
+        dirty = true;
+        return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('encode failed'))), 'image/png'));
+      },
+      getMeta: () => ({ name: `recurror-${stamp()}.png` }),
+    });
+  } else {
+    $('#shelfBtn').hidden = true;
+  }
   for (const b of $$('[data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
   $('#fileInput').addEventListener('change', async (e) => {
     const f = e.target.files[0];
