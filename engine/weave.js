@@ -89,7 +89,8 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
     const L = (hwOther + hwOwn * cos) / Math.max(sin, 0.12) + 0.5 * hwOwn;
     return Math.max(1.5 * hwOwn, Math.min(L, 12 * hwOwn));
   };
-  const scan = (P, self, sc = 1) => {
+  // flip = −1 for a reflected copy: its heights are drawn negated (see below)
+  const scan = (P, self, sc = 1, flip = 1) => {
     for (let k = 0; k < segN; k++) {
       const a = P[k], b = P[(k + 1) % n];
       if (!Number.isFinite(a.x) || !Number.isFinite(b.x)) continue;
@@ -114,7 +115,7 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
           const sb = cum[k] + r[1] * (cum[k + 1] - cum[k]);
           const ux = s1.x - s0.x, uy = s1.y - s0.y, vx = b.x - a.x, vy = b.y - a.y;
           const cos = Math.min(1, Math.abs(ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy) || 1));
-          pairs.push([sa, sb, reach(maxHw * sc, maxHw, cos), reach(maxHw / sc, maxHw, cos)]);
+          pairs.push([sa, sb, reach(maxHw * sc, maxHw, cos), reach(maxHw / sc, maxHw, cos), flip]);
         }
       }
     }
@@ -129,7 +130,7 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
     if (Math.hypot(c.x - cx, c.y - cy) > R0 + rj + 2 * maxHw) continue;
     tested++;
     const P = samples.map((p) => mobApply(m, p.x, p.y));
-    scan(P, false, Math.max(1e-3, mobScaleAt(m, cx, cy)));
+    scan(P, false, Math.max(1e-3, mobScaleAt(m, cx, cy)), m.conj ? -1 : 1);
   }
   if (!pairs.length) return { ...empty, plateau: Math.max(2 * maxHw, 3) };
 
@@ -152,7 +153,14 @@ export function solveWeave(samples, closed, xs, maxHw, flip = false) {
   const N = nodeS.length;
   const dsu = new ParityDSU(N);
   let crossings = 0;
-  for (const [na, nb] of ends) if (na !== nb) { dsu.union(na, nb, 1); crossings++; }
+  // A reflected copy is drawn with its heights negated (a mirror image of a weave is the same weave
+  // seen from below), so crossing it ties the two heights equal, not opposite. That makes a strand
+  // crossing its own mirror image on the mirror line solvable.
+  ends.forEach(([na, nb], p) => {
+    const flip = pairs[p][4];
+    if (na !== nb) { dsu.union(na, nb, flip < 0 ? 0 : 1); crossings++; }
+    else if (flip < 0) crossings++;
+  });
   let alternations = 0, kept = 0;
   const alt = (a, b) => { alternations++; if (dsu.union(a, b, 1)) kept++; };
   for (let i = 0; i + 1 < N; i++) alt(i, i + 1);
@@ -230,7 +238,7 @@ function strandInfo(st) {
 export function solveKnot(strands) {
   const S = strands.filter((s) => s.samples.length >= 2).map(strandInfo);
   const out = new Map();
-  for (const s of strands) out.set(s.id, { heightAt: () => 0, heightAtX: () => 0, underAt: () => 1e4, unders: [], nodes: [], crossings: 0 });
+  for (const s of strands) out.set(s.id, { heightAt: () => 0, heightAtX: () => 0, underAt: () => 1e4, overAt: () => 1e4, unders: [], nodes: [], crossings: 0 });
   if (!S.length) return out;
   const reach = (hwOther, hwOwn, cos) => {
     const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
@@ -284,7 +292,7 @@ export function solveKnot(strands) {
               const cotC = Math.max(-8.3, Math.min(8.3, cot));
               const orient = m.conj ? -1 : 1;
               pairs.push([ai, sa, bi, sb, reach(B.maxHw * sc, A.maxHw, cos), reach(A.maxHw / sc, B.maxHw, cos),
-                cotC, B.maxHw * sc / sin, -orient * cotC, A.maxHw / sc / sin]);
+                cotC, B.maxHw * sc / sin, -orient * cotC, A.maxHw / sc / sin, orient]);
             }
           }
         }
@@ -312,7 +320,13 @@ export function solveKnot(strands) {
   const N = nodeS.length;
   const dsu = new ParityDSU(N);
   let crossings = 0;
-  for (const [na, nb] of ends) if (na !== nb) { dsu.union(na, nb, 1); crossings++; }
+  // a reflected copy is drawn with negated heights (the weave seen from below), so crossing it ties
+  // the heights equal: a strand crossing its own mirror image on a mirror line is then solvable
+  ends.forEach(([na, nb], p) => {
+    const flip = pairs[p][10];
+    if (na !== nb) { dsu.union(na, nb, flip < 0 ? 0 : 1); crossings++; }
+    else if (flip < 0) crossings++;
+  });
   // alternation along each strand
   S.forEach((A, ai) => {
     const b0 = nodeBase[ai], b1 = ai + 1 < S.length ? nodeBase[ai + 1] : N;
@@ -323,16 +337,17 @@ export function solveKnot(strands) {
   // (arc length, lateral) coordinates. The strand's height is held over exactly that footprint,
   // so neighbouring crossings whose overlaps crowd each other along the centre line (shallow
   // crossings) no longer fight over one arc-length profile. Under-crossings also drive shading.
-  const feet = S.map(() => []), unders = S.map(() => []);
+  const feet = S.map(() => []), unders = S.map(() => []), overs = S.map(() => []);
   const hOf = (node) => (dsu.find(node)[1] ? -1 : 1) * (S[nodeStrand[node]].flip ? -1 : 1);
-  pairs.forEach(([ai, sa, bi, sb, , , cA, oA, cB, oB], p) => {
+  pairs.forEach(([ai, sa, bi, sb, , , cA, oA, cB, oB, flip], p) => {
     const [na, nb] = ends[p];
-    if (na === nb) return;
+    if (na === nb && flip > 0) return;
     const ha = hOf(na), hb = hOf(nb);
     feet[ai].push({ s: sa, c: cA, o: oA, h: ha });
     feet[bi].push({ s: sb, c: cB, o: oB, h: hb });
-    if (ha < 0) unders[ai].push({ s: sa, c: cA, o: oA });
-    if (hb < 0) unders[bi].push({ s: sb, c: cB, o: oB });
+    // source heights: under where h < 0; a reflected copy (drawn negated) is under where h > 0
+    (ha < 0 ? unders : overs)[ai].push({ s: sa, c: cA, o: oA });
+    (hb < 0 ? unders : overs)[bi].push({ s: sb, c: cB, o: oB });
   });
   S.forEach((A, ai) => {
     const b0 = nodeBase[ai], b1 = ai + 1 < S.length ? nodeBase[ai + 1] : N;
@@ -358,10 +373,10 @@ export function solveKnot(strands) {
     };
     // distance along the strand from (s, x) to the nearest edge of a strand passing over it
     // (negative inside the covered part): where "end shading" starts when a strand goes under
-    const U = unders[ai], T = A.total;
-    const underAt = (s, x) => {
+    const U = unders[ai], O = overs[ai], T = A.total;
+    const distTo = (L) => (s, x) => {
       let d = 1e4;
-      for (const u of U) {
+      for (const u of L) {
         let ds = s - u.s - x * u.c;
         if (A.closed && T > 0) ds -= T * Math.round(ds / T);
         d = Math.min(d, Math.abs(ds) - u.o);
@@ -384,7 +399,8 @@ export function solveKnot(strands) {
       if (f1 <= 0 || h1 === h2 || f2 === Infinity) return h1;
       return h1 + (h2 - h1) * f1 / (f1 + f2);
     };
-    out.set(A.id, { heightAt, heightAtX, underAt, unders: U, nodes, crossings: nodes.length });
+    const underAt = distTo(U), overAt = distTo(O);
+    out.set(A.id, { heightAt, heightAtX, underAt, overAt, unders: U, overs: O, nodes, crossings: nodes.length });
   });
   return out;
 }

@@ -90,7 +90,7 @@ attribute float a_hw;
 attribute vec2 a_along;
 attribute vec4 a_clip;        // sharp-corner legs: two half-planes, (c0, c1) each; keep where c0 + c1·e ≥ 0
 varying vec2 v_clip;
-attribute vec2 a_weave;       // (weave height, distance to the edge of a strand passing over)
+attribute vec3 a_weave;       // (weave height, distance to the edge of a strand passing over, … of one it passes over)
 attribute vec2 a_ink;         // (slowness of the pen, sharpness of the turn)
 
 uniform float u_lightFollow;  // 1 = light lives in each copy's local frame
@@ -112,7 +112,9 @@ varying vec2 v_wp;            // world position (the paper lives here)
 varying float v_under;
 
 void main() {
-  v_under = a_weave.y;
+  // a reflected copy shows the weave from below: negated height, and its unders are the source's overs
+  float wSign = i_conj > 0.5 ? -1.0 : 1.0;
+  v_under = i_conj > 0.5 ? a_weave.z : a_weave.y;
   vec2 w0 = mobP(a_pos);
   mat2 J = warpJ(w0) * mobJ(a_pos);
   float det = abs(J[0][0] * J[1][1] - J[1][0] * J[0][1]);
@@ -122,7 +124,7 @@ void main() {
   vec2 p = warpP(w0) + J * (a_ext * e);
   vec3 c = u_view * vec3(p, 1.0);
   // depth ranges leave headroom for the per-pixel centre-distance term (u_unionZ) added in the fragment shader
-  float zv = u_weaveOn > 0.5 ? 0.5 * (-0.9 * a_weave.x + 0.05 * (1.0 - 2.0 * a_along.x)) : 0.6 * (1.0 - 2.0 * a_along.x);
+  float zv = u_weaveOn > 0.5 ? 0.5 * (-0.9 * wSign * a_weave.x + 0.05 * (1.0 - 2.0 * a_along.x)) : 0.6 * (1.0 - 2.0 * a_along.x);
   gl_Position = vec4(c.xy, u_softZ > 0.5 ? 0.999 - 1.998 * i_idx : u_zOff + u_zScale * zv, 1.0);
   v_dc = a_vc * e;
   v_clip = a_clip.xz + a_clip.yw * e;
