@@ -15,7 +15,7 @@ import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.17.0';
+export const VERSION = '2.17.1';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
