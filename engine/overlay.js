@@ -106,6 +106,22 @@ export function drawOverlay(ctx, s) {
     ctx.stroke();
   }
 
+  if (s.lasso && s.lasso.length > 1) {
+    ctx.save();
+    ctx.beginPath();
+    s.lasso.forEach((q, i) => (i ? ctx.lineTo(X(q.x), Y(q.y)) : ctx.moveTo(X(q.x), Y(q.y))));
+    ctx.closePath();
+    if (s.lassoFill) { ctx.fillStyle = 'rgba(125,211,252,0.18)'; ctx.fill(); }
+    ctx.setLineDash([5, 4]); ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(253,186,116,0.9)'; ctx.stroke();
+    ctx.restore();
+  }
+  if (s.eraser) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(X(s.eraser.x), Y(s.eraser.y), s.eraser.r, 0, Math.PI * 2);
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = 'rgba(252,165,165,0.95)'; ctx.stroke();
+    ctx.restore();
+  }
   if (s.cursor && (s.tool === 'draw' || s.tool === 'pen') && s.brushWidth) {
     ctx.strokeStyle = 'rgba(255,255,255,0.5)';
     ctx.lineWidth = 1;

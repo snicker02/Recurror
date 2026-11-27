@@ -350,6 +350,8 @@ export class Renderer {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
     this.paperU = paperUniform(doc);
     if (!o.transparent && this.paperU[0] > 0) this.drawPaper(o, scissor);
+    // a reference image (on screen only: never passed in for export or the bucket's picture)
+    if (o.reference && !o.reference.above) this.drawReference(o, scissor);
 
     const live = new Set();
     for (const s of doc.strokes) live.add(s.id);
@@ -403,6 +405,7 @@ export class Renderer {
       }
     }
     if (o.prune !== false) this.prune(live);
+    if (o.reference && o.reference.above) { gl.bindFramebuffer(gl.FRAMEBUFFER, T.A.fbo); this.drawReference(o, scissor); }
 
     if (!o.target || o.target === 'screen') {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -568,6 +571,66 @@ export class Renderer {
   }
 
   /** Multiply the paper's relief onto the background (artboard only). */
+  /** Upload (or clear, with null) the reference image's picture. */
+  setReference(img) {
+    const gl = this.gl;
+    if (this.refTex) { gl.deleteTexture(this.refTex); this.refTex = null; }
+    if (!img) return;
+    this.refTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.refTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  /** The reference picture as a quad: centre c, half-axes ax (across) and ay (down), at an opacity. */
+  drawReference(o, scissor) {
+    const R = o.reference;
+    if (!this.refTex || !R || !(R.opacity > 0)) return;
+    const gl = this.gl;
+    if (!this.progRef) {
+      this.progRef = program(gl, `
+attribute vec2 a_pos;
+uniform mat3 u_view;
+uniform vec2 u_c, u_ax, u_ay;
+varying vec2 v_uv;
+void main() {
+  vec2 w = u_c + a_pos.x * u_ax + a_pos.y * u_ay;
+  v_uv = a_pos * 0.5 + 0.5;
+  gl_Position = vec4((u_view * vec3(w, 1.0)).xy, 0.0, 1.0);
+}`, `
+precision mediump float;
+uniform sampler2D u_tex;
+uniform float u_op;
+varying vec2 v_uv;
+void main() { gl_FragColor = texture2D(u_tex, v_uv) * u_op; }`);
+    }
+    const P = this.progRef;
+    gl.useProgram(P.p);
+    gl.uniformMatrix3fv(P.uni.u_view, false, o.viewMat);
+    gl.uniform2f(P.uni.u_c, R.c[0], R.c[1]);
+    gl.uniform2f(P.uni.u_ax, R.ax[0], R.ax[1]);
+    gl.uniform2f(P.uni.u_ay, R.ay[0], R.ay[1]);
+    gl.uniform1f(P.uni.u_op, Math.min(1, R.opacity));
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.refTex);
+    gl.uniform1i(P.uni.u_tex, 0);
+    scissor();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.STENCIL_TEST);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
+    this.setAttribs([P.att.a_pos]);
+    gl.vertexAttribPointer(P.att.a_pos, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
   drawPaper(o, scissor) {
     const gl = this.gl, P = this.progPaper;
     const inv = invView(o.viewMat);

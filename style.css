@@ -60,6 +60,8 @@ label.inline { display: flex; align-items: center; gap: 5px; color: var(--dim); 
 #overlay.panning { cursor: grabbing; }
 #overlay.edit { cursor: default; }
 #overlay.move { cursor: move; }
+#overlay.erase { cursor: none; }
+#overlay.cross { cursor: crosshair; }
 #overlay.nwse { cursor: nwse-resize; }
 #overlay.nesw { cursor: nesw-resize; }
 #overlay.rotate { cursor: grab; }
@@ -122,8 +124,8 @@ body { overflow: hidden; }
   #topbar::-webkit-scrollbar { display: none; }
   #topbar > * { flex-shrink: 0; }
   .group.right { margin-left: 0; }
-  #tools { padding: 6px 4px; }
-  #tools button { font-size: 16px; padding: 6px 0; }
+  #tools { padding: 4px; gap: 3px; }
+  #tools button { font-size: 15px; padding: 4px 0; }
   #status { gap: 10px; padding: 4px 8px calc(4px + env(safe-area-inset-bottom)); }
   #status .credit { padding-left: 10px; }
   #zoom { display: none; }
@@ -131,15 +133,16 @@ body { overflow: hidden; }
 
 /* Phones in landscape: short screen, so slim every bar and narrow the panel. */
 @media (max-height: 500px) and (orientation: landscape) {
-  #main { grid-template-columns: 54px 1fr 250px; grid-template-rows: none; }
+  #main { grid-template-columns: 84px 1fr 250px; grid-template-rows: none; }
   #panel { grid-column: auto; border-left: 1px solid var(--line); border-top: 0; }
   #topbar { flex-wrap: nowrap; overflow-x: auto; padding: 4px 8px; gap: 10px; scrollbar-width: none; }
   #topbar::-webkit-scrollbar { display: none; }
   #topbar > * { flex-shrink: 0; }
   .group.right { margin-left: 0; }
-  #tools { padding: 4px; gap: 4px; }
+  /* ten tools on a short screen: two columns of icons (each button's tooltip names it) */
+  #tools { padding: 4px; gap: 4px; display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
   #tools button { font-size: 15px; padding: 4px 0; }
-  #tools button small { font-size: 9px; }
+  #tools button small { display: none; }
   #status #hint { display: none; }
 }
 
@@ -209,7 +212,7 @@ body.tabbed #panel > details > summary { display: none; }
   body.tabbed #panel { grid-column: 1 / 3; grid-row: 3; border-top: 0; }
 }
 @media (max-height: 500px) and (orientation: landscape) {
-  body.tabbed #main { grid-template-columns: 54px 1fr 250px; grid-template-rows: auto minmax(0, 1fr); }
+  body.tabbed #main { grid-template-columns: 84px 1fr 250px; grid-template-rows: auto minmax(0, 1fr); }
   body.tabbed #tools { grid-column: 1; grid-row: 1 / 3; }
   body.tabbed #stage { grid-column: 2; grid-row: 1 / 3; }
   body.tabbed #tabbar { grid-column: 3; grid-row: 1; border-top: 0; border-left: 1px solid var(--line); }

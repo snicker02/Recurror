@@ -4,6 +4,8 @@ import { floodRegion, traceRegion, keyhole } from './engine/bucket.js';
 import { Renderer } from './engine/renderer.js';
 import { drawOverlay, viewPoint, xformHandles } from './engine/overlay.js';
 import { parseDocText, looksLikeDocText } from './engine/importtext.js';
+import { cutByCapsules, offsetPolyline, simplifyRDP, pointInPoly } from './engine/pathops.js';
+import { shapePoints } from './engine/shapes.js';
 import { similarity, transformStroke, transformPlacement, canRotate, snapshot, restore as restoreStroke } from './engine/transform.js';
 import {
   newDocument, makeStroke, touch, normaliseDoc, serialise, History,
@@ -16,7 +18,7 @@ import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.18.0';
+export const VERSION = '2.19.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -46,7 +48,9 @@ const tpl = {
   shape: defaultShape(), style: defaultStyle(), fill: defaultFill(),
   sym: defaultSym(doc.width, doc.height), rec: defaultRec(), warp: defaultWarp(),
 };
-const ui = { bucketCrop: false, bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false };
+const ui = { bucketCrop: false, bucketTol: 40, bucketGap: 3, bucketSym: true, bucketUnder: true, tool: 'draw', tapPoints: true, joinEnds: true, showGuides: true, snap: false, smooth: 2.5, stabilize: 0.3, exportScale: 1, transparent: false ,
+  eraseSize: 14, eraseAll: false, shape: 'ellipse', shapeSides: 6, shapeInner: 0.45, shapeTurns: 3, shapeSweep: 180,
+  lassoMode: 'select', echoN: 2, echoGap: 1.6, echoSide: 'both', refSave: true };
 // the bucket's own fill style (Bucket panel, bound as bfill.*); ui.bucketCol stays as a shorthand for colour A
 ui.bucketFill = { mode: 'flat', colA: '#000000', colB: '#7dd3fc', angle: 90, scale: 24, thick: 0.4, lit: false, opacity: 1 };
 Object.defineProperty(ui, 'bucketCol', { get: () => ui.bucketFill.colA, set: (v) => { ui.bucketFill.colA = v; }, enumerable: true });
@@ -90,6 +94,11 @@ const HINTS = {
   pan: 'Pan: drag to move the view · wheel to zoom',
   bucket: 'Bucket: click a closed area to fill it (fills go under the lines) · click a fill again to recolour it · Gap closes small breaks in the lines (K)',
 };
+Object.assign(HINTS, {
+  erase: 'Eraser: drag across lines to cut them (every symmetric copy is cut with them) · E',
+  shape: 'Shape: drag to draw it · Shift: circle / square / 15° steps · Alt: from the centre · U',
+  lasso: 'Lasso: draw round strokes to select them (Shift adds) · Fill mode fills the loop you draw · L',
+});
 const TOUCH_HINTS = {
   draw: 'Draw: drag to sketch · tap to place points, double-tap to finish · pinch to zoom',
   pen: 'Pen: tap control points · double-tap to finish · tap the first point to close',
@@ -98,6 +107,9 @@ const TOUCH_HINTS = {
   center: 'Centre: tap or drag to place the symmetry centre',
   pan: 'Pan: drag to move · pinch to zoom',
   bucket: 'Bucket: tap a closed area to fill it · tap a fill to recolour it · pinch to zoom',
+  erase: 'Eraser: drag across lines to cut them (their symmetric copies too)',
+  shape: 'Shape: drag to draw the shape chosen in the Shape panel',
+  lasso: 'Lasso: draw round strokes to select them, or round an area to fill it (Fill mode)',
 };
 if (window.matchMedia && matchMedia('(pointer: coarse)').matches) Object.assign(HINTS, TOUCH_HINTS);
 
@@ -232,6 +244,7 @@ function draw() {
         viewMat, pxWorld: 1 / z, width: W, height: H, artRect,
         outside: [0.043, 0.047, 0.059, 1], transparent: false,
         extra: preview ? [{ stroke: preview, layer: activeLayer().id }] : [],
+        reference: refQuad(),
       });
     } catch (err) { console.error(err); }
     updateLiveInfo();
@@ -242,6 +255,8 @@ function draw() {
     showGuides: ui.showGuides, selection, primary, hover, handleHot, widthHot,
     penPoints: penPoints.map((p) => viewPointTpl(p)), penCloseHot, cursor, tool, brushWidth: tpl.style.width,
     marquee, snap: snapShow, grid: gridOf(doc), xbox: tool === 'edit' ? xformBox() : null,
+    eraser: tool === 'erase' && cursor ? { x: cursor.x, y: cursor.y, r: ui.eraseSize } : null,
+    lasso: lassoPath, lassoFill: ui.lassoMode === 'fill',
   });
 }
 
@@ -289,6 +304,7 @@ function getSource(root) {
   if (TPL_ROOTS.has(root)) return tpl[root];
   if (root === 'bfill') return ui.bucketFill;
   if (root === 'layer') return activeLayer();
+  if (root === 'ref') return doc.ref || null;
   if (root === 'light') return doc.light;
   if (root === 'doc') return doc;
   if (root === 'ui') return ui;
@@ -530,7 +546,9 @@ function setTool(t) {
   const was = ui.tool;
   ui.tool = t;
   updateVisibility();
-  if (t === 'bucket' && was !== 'bucket' && panelTabs && document.body.classList.contains('tabbed')) panelTabs.show($('#bucketSection'));
+  // on a phone, picking a tool with its own settings opens their tab
+  const toolSection = { bucket: '#bucketSection', erase: '#eraseSection', shape: '#shapeSection', lasso: '#lassoSection' }[t];
+  if (toolSection && was !== t && panelTabs && document.body.classList.contains('tabbed')) panelTabs.show($(toolSection));
   for (const b of $$('#tools button')) b.classList.toggle('active', b.dataset.tool === t);
   hover = null; handleHot = -1; widthHot = -1; xformHot = -1; snapShow = null;
   updateCursorClass();
@@ -556,6 +574,8 @@ function updateCursorClass() {
   }
   else if (t === 'width') ovCanvas.classList.add('width');
   else if (t === 'bucket') ovCanvas.classList.add('bucket');
+  else if (t === 'erase') ovCanvas.classList.add('erase');
+  else if (t === 'shape' || t === 'lasso') ovCanvas.classList.add('cross');
 }
 
 function makePreview(points, overrides = {}) {
@@ -750,6 +770,177 @@ function xformApply(make) {
   if (!selection.length) transformPlacement(tpl.sym, tpl.rec, tpl.warp, S);
   else if (primary) loadTemplateFrom(primary);
   commit(); refreshPanel(); dirty = true;
+}
+
+// ---- eraser: cuts lines where it passes over any of their copies ----
+/** The eraser's sweep a→b (world) as capsules in a stroke's own coordinates, one per copy it reaches. */
+function eraserCaps(s, a, b, rW) {
+  const crop = s.sym.crop ? cropOf(s) : null;
+  const xs = transformsFor(s.sym, s.rec, doc.width, doc.height, crop ? { x: crop.c[0], y: crop.c[1] } : bound(s));
+  const inv = inverses(xs);
+  let pa = a, pb = b, ws = 1;
+  if (warpActive(s.warp)) {
+    pa = unwarp(s.warp, s.sym, a.x, a.y); pb = unwarp(s.warp, s.sym, b.x, b.y, pa);
+    ws = warpScaleAt(s.warp, s.sym, pa.x, pa.y) || 1;
+  }
+  const bd = bound(s);
+  // cut where the eraser touches the drawn line, not just its centre: reach + half the width
+  const hw = s.style.mode === 'none' ? 0 : s.style.width * 0.5;
+  const caps = [];
+  for (let k = 0; k < xs.length; k++) {
+    const la = mobApply(inv[k], pa.x, pa.y), lb = mobApply(inv[k], pb.x, pb.y);
+    if (crop && !cropKeeps(crop, la.x, la.y) && !cropKeeps(crop, lb.x, lb.y)) continue;
+    const sc = mobScaleAt(xs[k].mob, la.x, la.y) * ws;
+    if (!(sc > 1e-9)) continue;
+    const r = rW / sc + hw;
+    const dx = lb.x - la.x, dy = lb.y - la.y, L2 = dx * dx + dy * dy;
+    const t = L2 > 0 ? Math.max(0, Math.min(1, ((bd.x - la.x) * dx + (bd.y - la.y) * dy) / L2)) : 0;
+    if (Math.hypot(bd.x - la.x - t * dx, bd.y - la.y - t * dy) > bd.r + r) continue;
+    caps.push({ ax: la.x, ay: la.y, bx: lb.x, by: lb.y, r });
+  }
+  return caps;
+}
+
+/** A piece of a cut or offset line as a new stroke like s (same brush, symmetry, layer, group). */
+function strokeLike(s, piece, closed = false, extra = {}) {
+  const tol = Math.max(0.03, 0.25 / view.zoom);
+  const pts = simplifyRDP(piece, tol);
+  const t = clone(s);
+  Object.assign(t, { id: newId(), rev: nextRev(), points: pts.map((q) => ({ x: q.x, y: q.y, p: q.p ?? 1, w: q.w ?? 1 })) }, extra);
+  t.shape = Object.assign(clone(s.shape), { spline: s.shape.spline === 'linear' ? 'linear' : 'catmull', closed: closed && pts.length >= 3 });
+  delete t.hidden;
+  return t;
+}
+
+function eraseAlong(a, b) {
+  const rW = ui.eraseSize / view.zoom;
+  const L = activeLayer();
+  let changed = false;
+  for (const s of doc.strokes.slice()) {
+    if (!editable(s) || s.bucket || s.points.length < 2) continue;
+    if (!ui.eraseAll && s.layer !== L.id) continue;
+    const caps = eraserCaps(s, a, b, rW);
+    if (!caps.length) continue;
+    const pieces = cutByCapsules(getSamples(s), isClosed(s), caps, Math.max(0.5, s.style.width * 0.25));
+    if (!pieces) continue;
+    const at = doc.strokes.indexOf(s);
+    const repl = pieces.map((pc) => strokeLike(s, pc, false, { fill: Object.assign(clone(s.fill), { mode: 'none' }) }));
+    doc.strokes.splice(at, 1, ...repl);
+    if (selection.includes(s)) setSelection(selection.filter((x) => x !== s).concat(repl), repl[0] || null);
+    changed = true;
+  }
+  if (changed) { pruneGroups(); dirty = true; }
+  return changed;
+}
+
+// ---- shapes ----
+function shapeStroke(a, b, e, forCommit) {
+  const g = shapePoints(ui.shape, a, b, {
+    fromCenter: !!(e && e.altKey), constrain: !!(e && e.shiftKey),
+    sides: ui.shapeSides, inner: ui.shapeInner, turns: ui.shapeTurns, sweep: ui.shapeSweep,
+  });
+  let guess;
+  const local = g.points.map((p) => { const l = unwarp(tpl.warp, tpl.sym, p.x, p.y, guess); guess = l; return { x: l.x, y: l.y, p: 1, w: 1 }; });
+  if (!forCommit) return makePreview(local, { spline: g.spline, closed: g.closed });
+  const s = makeStroke(local, tpl, activeLayer().id);
+  Object.assign(s.shape, { spline: g.spline, closed: g.closed });
+  return s;
+}
+
+// ---- lasso ----
+let lassoPath = null;
+function lassoSelect(poly, additive) {
+  const picked = [];
+  for (const s of doc.strokes) {
+    if (!editable(s)) continue;
+    const crop = s.sym.crop ? cropOf(s) : null;
+    const xs = transformsFor(s.sym, s.rec, doc.width, doc.height, crop ? { x: crop.c[0], y: crop.c[1] } : bound(s));
+    const sm = getSamples(s);
+    const step = Math.max(1, Math.floor(sm.length / 32));
+    const cstep = Math.max(1, Math.floor(xs.length / 2000));
+    let hit = false;
+    for (let k = 0; k < xs.length && !hit; k += cstep) {
+      for (let i = 0; i < sm.length; i += step) {
+        if (crop && !cropKeeps(crop, sm[i].x, sm[i].y)) continue;
+        let q = mobApply(xs[k].mob, sm[i].x, sm[i].y);
+        if (warpActive(s.warp)) q = warpPoint(s.warp, +s.sym.cx, +s.sym.cy, q.x, q.y);
+        if (pointInPoly(poly, q.x, q.y)) { hit = true; break; }
+      }
+    }
+    if (hit) picked.push(...membersOf(s));
+  }
+  const uniq = [...new Set(additive ? selection.concat(picked) : picked)];
+  setSelection(uniq, picked[picked.length - 1] || (additive ? primary : null));
+  return picked.length;
+}
+
+/** A fill region with the bucket's style: from a lasso loop (world) or a closed stroke (local). */
+function makeFillStroke(localPoly, place, layerId) {
+  const t = {
+    shape: { spline: 'linear', closed: true },
+    style: Object.assign(clone(tpl.style), { mode: 'none' }),
+    fill: Object.assign(clone(tpl.fill), clone(ui.bucketFill)),
+    sym: place.sym, rec: place.rec || defaultRec(), warp: place.warp || defaultWarp(),
+  };
+  const s = makeStroke(simplifyRDP(localPoly, Math.max(0.05, 0.4 / view.zoom)), t, layerId);
+  s.bucket = true;
+  return s;
+}
+
+function lassoFill(poly) {
+  const L = activeLayer();
+  const sym = clone(tpl.sym);
+  if (!ui.bucketSym) sym.mode = 'none';
+  sym.crop = false;
+  const warp = warpActive(tpl.warp) ? clone(tpl.warp) : defaultWarp();
+  let guess;
+  const local = poly.map((p) => { const l = unwarp(warp, sym, p.x, p.y, guess); guess = l; return { x: l.x, y: l.y }; });
+  const s = makeFillStroke(local, { sym, warp }, L.id);
+  const at = ui.bucketUnder ? doc.strokes.findIndex((x) => x.layer === L.id) : -1;
+  if (at >= 0) doc.strokes.splice(at, 0, s); else doc.strokes.push(s);
+  commit(); dirty = true;
+}
+
+// ---- reference picture (kept out of the undo history; written into saved files) ----
+let refPic = null;          // { src, img, w, h }
+function setRefPicture(src, then) {
+  if (!src) { refPic = null; if (renderer) renderer.setReference(null); dirty = true; return; }
+  const img = new Image();
+  img.onload = () => {
+    refPic = { src, img, w: img.naturalWidth, h: img.naturalHeight };
+    if (renderer) renderer.setReference(img);
+    if (then) then(refPic);
+    refreshPanel(); dirty = true;
+  };
+  img.onerror = () => flashHint('Could not read that picture.');
+  img.src = src;
+}
+function refQuad() {
+  const R = doc.ref;
+  if (!R || !R.visible || !refPic) return null;
+  const aspect = refPic.h / refPic.w;
+  const fitW = Math.min(doc.width, doc.height / aspect);
+  const w = fitW * R.scale, h = w * aspect, t = R.rot * Math.PI / 180;
+  const c = Math.cos(t), sn = Math.sin(t);
+  return { c: [R.fx * doc.width, R.fy * doc.height], ax: [c * w / 2, sn * w / 2], ay: [-sn * h / 2, c * h / 2], opacity: R.opacity, above: R.above };
+}
+async function loadRefFile(file) {
+  const src = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = rej; fr.readAsDataURL(file); });
+  // keep it to 2048 px: plenty to trace over, small enough to save with the drawing
+  const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('not a picture')); i.src = src; });
+  const k = Math.min(1, 2048 / Math.max(img.naturalWidth, img.naturalHeight));
+  let out = src;
+  if (k < 1 || src.length > 3e6) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(img.naturalWidth * k)); cv.height = Math.max(1, Math.round(img.naturalHeight * k));
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    out = /png|gif|webp|svg/i.test(file.type) ? cv.toDataURL('image/png') : cv.toDataURL('image/jpeg', 0.9);
+  }
+  setRefPicture(out, (pic) => {
+    doc.ref = Object.assign({ visible: true, above: false, opacity: 0.5, fx: 0.5, fy: 0.5, scale: 1, rot: 0 }, doc.ref || {}, { aspect: pic.h / pic.w });
+    commit(); refreshPanel();
+    flashHint('Reference picture loaded: it shows while you draw and is never exported.');
+  });
 }
 
 function deletePoint(h) {
@@ -1041,6 +1232,9 @@ function onPointerDown(e) {
     case 'draw': if (canDrawHere()) beginDraw(w, e, sx, sy); break;
     case 'pen': if (canDrawHere()) penClick(w, sx, sy); break;
     case 'bucket': if (canDrawHere()) bucketFill(w); break;
+    case 'erase': drag = { kind: 'erase', last: w, changed: eraseAlong(w, w) }; break;
+    case 'shape': if (canDrawHere()) { const a = snapWorld(w.x, w.y); drag = { kind: 'shape', a, b: a, s0: { sx, sy }, moved: false, mods: e }; } break;
+    case 'lasso': drag = { kind: 'lasso', pts: [w], additive: e.shiftKey, s0: { sx, sy } }; lassoPath = drag.pts; break;
     case 'center': setCenter(snapWorld(w.x, w.y, 'artboard')); drag = { kind: 'center' }; break;
     case 'width': {
       let h = widthHandleAt(sx, sy);
@@ -1133,6 +1327,27 @@ function onPointerMove(e) {
         break;
       }
       case 'xform': moveXform(w, e); break;
+      case 'erase': {
+        const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+        for (const ce of (evs.length ? evs : [e])) {
+          const p = screenPos(ce), q = toWorld(p.sx, p.sy);
+          if (Math.hypot(q.x - drag.last.x, q.y - drag.last.y) * view.zoom < 1) continue;
+          if (eraseAlong(drag.last, q)) drag.changed = true;
+          drag.last = q;
+        }
+        break;
+      }
+      case 'shape': {
+        drag.b = snapWorld(w.x, w.y); drag.mods = e;
+        drag.moved = drag.moved || Math.hypot(sx - drag.s0.sx, sy - drag.s0.sy) > 4;
+        preview = drag.moved ? shapeStroke(drag.a, drag.b, e, false) : null;
+        break;
+      }
+      case 'lasso': {
+        const last = drag.pts[drag.pts.length - 1];
+        if (Math.hypot(w.x - last.x, w.y - last.y) * view.zoom >= 2) drag.pts.push(w);
+        break;
+      }
       case 'handle': {
         if (!drag.live) {
           if (Math.hypot(sx - drag.s0.sx, sy - drag.s0.sy) < 8) break;   // a resting finger: no jitter, long-press still possible
@@ -1237,6 +1452,20 @@ function onPointerUp(e) {
     case 'move': case 'width': if (drag.moved) commit(); drag = null; break;
     case 'xform': if (drag.moved) { commit(); if (primary) loadTemplateFrom(primary); refreshPanel(); } drag = null; break;
     case 'center': commit(); drag = null; break;
+    case 'erase': if (drag.changed) commit(); drag = null; break;
+    case 'shape': {
+      const d = drag; drag = null; preview = null; snapShow = null;
+      if (d.moved) { doc.strokes.push(shapeStroke(d.a, d.b, d.mods, true)); commit(); }
+      break;
+    }
+    case 'lasso': {
+      const d = drag; drag = null; lassoPath = null;
+      const big = d.pts.length >= 3 && d.pts.some((q) => Math.hypot(q.x - d.pts[0].x, q.y - d.pts[0].y) * view.zoom > 6);
+      if (!big) { if (ui.lassoMode === 'select' && !d.additive) setSelection([], null); break; }
+      if (ui.lassoMode === 'fill') { if (canDrawHere()) lassoFill(d.pts); }
+      else { const n = lassoSelect(d.pts, d.additive); if (!n && !d.additive) flashHint('Nothing inside the lasso.'); }
+      break;
+    }
     case 'marquee': {
       const d = drag; drag = null; marquee = null;
       if (!d.moved) { if (!d.additive) setSelection([], null); break; }
@@ -1420,6 +1649,8 @@ function importTextDialog(prefill = '') {
 }
 
 function loadDoc(d) {
+  if (d.ref && d.ref.src) { setRefPicture(d.ref.src); delete d.ref.src; }
+  else setRefPicture(null);
   doc = d;
   setSelection([], null);
   history.reset(doc);
@@ -1435,7 +1666,43 @@ const actions = {
   },
   open() { $('#fileInput').click(); },
   importText() { importTextDialog(); },
-  save() { download(new Blob([serialise(doc)], { type: 'application/json' }), `recurror-${stamp()}.json`); },
+  save() { download(new Blob([serialise(doc, { refSrc: ui.refSave && refPic && doc.ref ? refPic.src : null })], { type: 'application/json' }), `recurror-${stamp()}.json`); },
+  echo() {
+    const list = selection.filter((s) => !s.bucket && s.points.length >= 2);
+    if (!list.length) { flashHint('Select one or more lines first, then make echoes of them.'); return; }
+    const sides = ui.echoSide === 'both' ? [1, -1] : ui.echoSide === 'left' ? [1] : [-1];
+    const made = [];
+    for (const s of list) {
+      const S = getSamples(s), closed = isClosed(s);
+      const gap = Math.max(0.5, ui.echoGap * Math.max(1, s.style.width));
+      const out = [];
+      for (let k = 1; k <= Math.max(1, Math.round(ui.echoN)); k++) for (const sd of sides) {
+        for (const pc of offsetPolyline(S, closed, sd * k * gap)) {
+          if (pc.length < 2) continue;
+          out.push(strokeLike(s, pc, !!pc.closed, { group: null, fill: Object.assign(clone(s.fill), { mode: 'none' }) }));
+        }
+      }
+      doc.strokes.splice(doc.strokes.indexOf(s) + 1, 0, ...out);
+      made.push(...out);
+    }
+    if (!made.length) { flashHint('No room for echoes at that spacing.'); return; }
+    setSelection(made, made[made.length - 1]);
+    commit(); refreshPanel(); dirty = true;
+    flashHint(`Made ${made.length} echo line${made.length === 1 ? '' : 's'}.`);
+  },
+  fillInside() {
+    const list = selection.filter((s) => !s.bucket && isClosed(s));
+    if (!list.length) { flashHint('Select closed shapes to fill (a closed spline, a lasso fill or a shape).'); return; }
+    for (const s of list) {
+      const f = makeFillStroke(getSamples(s), { sym: Object.assign(clone(s.sym), { crop: false }), rec: clone(s.rec), warp: clone(s.warp) }, s.layer);
+      doc.strokes.splice(doc.strokes.indexOf(s), 0, f);
+    }
+    commit(); dirty = true;
+    flashHint(`Filled ${list.length} shape${list.length === 1 ? '' : 's'} with the bucket's fill, under the line${list.length === 1 ? '' : 's'}.`);
+  },
+  refLoad() { $('#refInput').click(); },
+  refRemove() { if (!doc.ref) return; delete doc.ref; setRefPicture(null); commit(); refreshPanel(); },
+  refFit() { if (!doc.ref) return; Object.assign(doc.ref, { fx: 0.5, fy: 0.5, scale: 1, rot: 0 }); commit(); refreshPanel(); dirty = true; },
   async demo() {
     if (doc.strokes.length && !(await ask('Load demo', 'Replace the current drawing with the demo?', 'Replace'))) return;
     const d = buildDemo();
@@ -1908,7 +2175,10 @@ function onKeyDown(e) {
     default:
       if (k === 'b') setTool('draw');
       else if (k === 'p') setTool('pen');
-      else if (k === 'v' || k === 'e') setTool('edit');
+      else if (k === 'v') setTool('edit');
+      else if (k === 'e') setTool('erase');
+      else if (k === 'u') setTool('shape');
+      else if (k === 'l') setTool('lasso');
       else if (k === 'w') setTool('width');
       else if (k === 'c') setTool('center');
       else if (k === 'h') setTool('pan');
@@ -1947,6 +2217,11 @@ function boot() {
     $('#shelfBtn').hidden = true;
   }
   for (const b of $$('[data-tool]')) b.addEventListener('click', () => setTool(b.dataset.tool));
+  $('#refInput').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) { try { await loadRefFile(f); } catch (err) { notify('Could not load picture', err.message); } }
+  });
   $('#fileInput').addEventListener('change', async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
@@ -1980,7 +2255,7 @@ function boot() {
   setTool('draw');
   if (renderer) {
     glCanvas.addEventListener('webglcontextlost', (e) => e.preventDefault());
-    glCanvas.addEventListener('webglcontextrestored', () => { try { renderer = new Renderer(glCanvas); renderer.onAsset = () => { dirty = true; }; dirty = true; } catch (err) { console.error(err); } });
+    glCanvas.addEventListener('webglcontextrestored', () => { try { renderer = new Renderer(glCanvas); renderer.onAsset = () => { dirty = true; }; if (refPic) renderer.setReference(refPic.img); dirty = true; } catch (err) { console.error(err); } });
   }
   requestAnimationFrame(frame);
 
@@ -1990,6 +2265,9 @@ function boot() {
     get selection() { return selection; }, select: (ids) => setSelection(doc.strokes.filter((s) => ids.includes(s.id)), null),
     get stats() { return renderer && renderer.stats; },
     get renderer() { return renderer; },
+    get selection() { return selection.slice(); },
+    hasRefPicture: () => !!refPic,
+    loadText: (t) => { const d = normaliseDoc(parseDocText(t).doc); loadDoc(d); },
     get xbox() { return xformBox(); }, get xboxHandles() { const b = xformBox(); return b ? xformHandles(b, (x) => x * view.zoom + view.panX, (y) => y * view.zoom + view.panY, COARSE) : null; },
     redraw: () => { dirty = true; draw(); },
   };
