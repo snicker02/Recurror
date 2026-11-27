@@ -34,6 +34,8 @@ engine/
   tabs.js           phone layout: panel sections as tabs under the drawing
   grid.js           drawing grid: overlay drawing and snap targets
   importtext.js     document from pasted text (repairs chat / notes damage)
+  pathops.js        eraser cuts, echo offsets (fold-free), simplification
+  shapes.js         shape tool geometry
   overlay.js        2D overlay: guides, selection, handles, width rings, marquee, snap marker
   document.js       document model (layers, groups), v1 migration, history
 ```
@@ -73,6 +75,15 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 In **Edit**, the selection gets an orange box around everything it draws, copies included. Drag a **corner** to scale it about the box centre (hold **Alt** to scale from the opposite corner). Drag the **round knob** above it to rotate (hold **Shift** for 15° steps). The **Selection** panel has **Fit to artboard** (scale and centre to fill 90% of the page), **Enlarge** (×1.25), **Shrink** (×0.8) and **Rotate 90°**; with nothing selected they act on the whole drawing. Everything that shapes the copies goes with the strokes: symmetry centre and angle, wallpaper tile, frieze repeat, hyperbolic disc, inversion circles, recursion offset and angle, warp scale, and the stroke's lengths (width, dashes, jitter, ink, wet spread, pattern scale), so the drawing looks the same, only bigger, smaller or turned. Wallpaper lattices have no orientation and some warps (waves, sinusoidal, cylinder, horseshoe, power) aren't rotation-symmetric, so those can be scaled but not rotated.
 
 **Deleting a point:** in Edit, right-click it or Alt-click it; on a touch screen, long-press it. A stroke keeps at least two points.
+
+## Drawing tools
+
+- **Eraser (E).** Drag across lines to cut them. It cuts where it touches the drawn line, through any symmetric copy, so the matching parts of every copy go with it. The pieces are ordinary strokes that keep their brush and symmetry. **Size** is in screen pixels. With **All layers** off it only cuts the active layer. Fills are left alone. One undo restores everything a drag cut.
+- **Shapes (U).** Line, rectangle, ellipse, polygon, star, spiral and arc. Drag to draw: **Shift** gives circles, squares and 15° steps, and **Alt** draws from the centre (polygons, stars, spirals and arcs always start at the centre). Sides, star inner radius, spiral turns and arc sweep are set in the Shape panel. Shapes take the current brush and symmetry and edit like any stroke; polygons, stars and rectangles keep sharp miter corners.
+- **Lasso (L).** In **Select** mode, draw round strokes to select every one with a copy inside the loop (Shift adds). In **Fill** mode the loop you draw becomes a fill with the Bucket's style and symmetry, under the layer's lines.
+- **Echo lines** (Selection panel). Parallel copies of the selected strokes, the zentangle aura: **Echoes** per side, **Spacing** in stroke widths, and **Side** (both, left/outside, right/inside). Folds at inside corners and tight bends are cut out, so echoes stay clean, and an inward echo too wide for its shape is skipped.
+- **Fill inside** (Selection panel). Fills each selected closed shape with the Bucket's fill, under its line, with the shape's own symmetry.
+- **Reference picture** (its own panel section). Load a photo or sketch to trace. **Opacity**, **Size**, **Rotate**, **Across** and **Down** place it, and **Above drawing** puts it on top. It's never exported or used by the bucket. Its placement is undoable, and the picture is saved into the file when **Save with drawing** is on (pictures are kept to 2048 px).
 
 ## Importing a document as text
 
@@ -236,6 +247,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.19.0**: New drawing tools. **Eraser** (E) cuts lines through any symmetric copy. **Shapes** (U): line, rectangle, ellipse, polygon, star, spiral, arc, as editable strokes. **Lasso** (L) selects through copies or fills the loop. **Echo lines** make parallel offsets (the zentangle aura) and **Fill inside** fills a closed shape. A **reference picture** to trace over, never exported. On landscape phones the tool column has two columns.
 - **2.18.0**: **Import text** in the top bar. Paste a document as text and choose Replace drawing or Add to drawing (as new layers, undoable). Chat and notes damage is cleaned up automatically (backticks, code fences, curly quotes, text around the JSON). Pressing Ctrl/Cmd+V with document text on the clipboard opens it too.
 - **2.17.2**: Knots with mirror symmetry. A strand crossing its own mirror image on a mirror line now weaves cleanly: one strand fully over, the other under, with no seam or stepped edges. Reflected copies show the weave from below (heights swapped), as in classic mirror-symmetric Celtic knots, so every crossing alternates.
 - **2.17.1**: Clean sharp corners. A polyline corner sharper than 20° is now two straight legs meeting exactly on the bisector, with a true miter tip, so no ink notch, edge-shading seam or folded inner edge shows. Where a stroke overlaps itself (tight loops), the part nearer its centre line wins per pixel, so the overlap reads as one shape (EXT_frag_depth; without it, as before).

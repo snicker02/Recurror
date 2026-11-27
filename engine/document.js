@@ -87,6 +87,18 @@ export function normaliseDoc(raw) {
   doc.gridSize = Math.max(2, Math.min(2048, num(raw.gridSize, 64)));
   doc.gridSub = Math.max(1, Math.min(16, Math.round(num(raw.gridSub, 4))));
   doc.gridSpokes = Math.max(4, Math.min(96, Math.round(num(raw.gridSpokes, 24))));
+  // reference image: placement and look (the picture itself, ref.src, is kept outside the undo
+  // history by the app and only written into saved files)
+  if (raw.ref && typeof raw.ref === 'object') {
+    const r = raw.ref;
+    doc.ref = {
+      visible: r.visible !== false, above: !!r.above,
+      opacity: Math.max(0, Math.min(1, num(r.opacity, 0.5))),
+      fx: num(r.fx, 0.5), fy: num(r.fy, 0.5), scale: Math.max(0.02, Math.min(20, num(r.scale, 1))),
+      rot: Math.max(-180, Math.min(180, num(r.rot, 0))), aspect: Math.max(1e-3, num(r.aspect, 1)),
+    };
+    if (typeof r.src === 'string' && r.src.startsWith('data:image/')) doc.ref.src = r.src;
+  }
   doc.assets = {};
   if (raw.assets && typeof raw.assets === 'object') for (const [k, v] of Object.entries(raw.assets)) if (typeof v === 'string' && v.startsWith('data:image/')) doc.assets[k] = v;
   if (Array.isArray(raw.layers) && raw.layers.length) {
@@ -135,12 +147,14 @@ export function syncGroup(doc, g) {
   }
 }
 
-export function serialise(doc) {
+/** Document as JSON. opts.refSrc: also write the reference picture (saved files, not undo history). */
+export function serialise(doc, opts = {}) {
   return JSON.stringify({
     format: FORMAT, version: FORMAT_VERSION, width: doc.width, height: doc.height, bg: doc.bg, light: doc.light,
     layers: doc.layers, activeLayer: doc.activeLayer, groups: doc.groups, blendEnds: doc.blendEnds !== false,
     paperType: doc.paperType || 'none', paperScale: doc.paperScale ?? 6, paperStrength: doc.paperStrength ?? 0.6,
     gridOn: !!doc.gridOn, gridType: doc.gridType || 'square', gridSize: doc.gridSize ?? 64, gridSub: doc.gridSub ?? 4, gridSpokes: doc.gridSpokes ?? 24,
+    ...(doc.ref ? { ref: Object.assign({}, doc.ref, opts.refSrc ? { src: opts.refSrc } : {}, opts.refSrc ? {} : { src: undefined }) } : {}),
     // only the pictures a stroke still uses
     assets: Object.fromEntries(Object.entries(doc.assets || {}).filter(([k]) => doc.strokes.some((s) => s.style.stampImg === k))),
     strokes: doc.strokes.map((s) => ({

@@ -42,6 +42,7 @@
     <button id="shelfBtn" title="Shared image shelf: send this drawing to another snicker02 app">⇄ Shelf</button>
   </div>
   <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  <input type="file" id="refInput" accept="image/*" hidden>
 </header>
 
 <main id="main">
@@ -52,6 +53,9 @@
     <button data-tool="width" title="Width: drag a control point's ring to set its width; Alt-click resets (W)">◎<small>Width</small></button>
     <button data-tool="center" title="Place symmetry centre (C)">⊕<small>Centre</small></button>
     <button data-tool="bucket" title="Paint bucket: fill a closed area under the lines; click a fill again to recolour it (K)">◩<small>Bucket</small></button>
+    <button data-tool="erase" title="Eraser: drag across lines to cut them; their symmetric copies are cut too (E)">⌫<small>Erase</small></button>
+    <button data-tool="shape" title="Shapes: line, rectangle, ellipse, polygon, star, spiral, arc as editable strokes (U)">◯<small>Shape</small></button>
+    <button data-tool="lasso" title="Lasso: draw round strokes to select them, or (Fill mode) fill the loop you draw (L)">➰<small>Lasso</small></button>
     <button data-tool="pan" title="Pan (H, or hold Space)">✥<small>Pan</small></button>
   </nav>
 
@@ -62,6 +66,28 @@
   </section>
 
   <aside id="panel">
+    <details open id="eraseSection" data-show="ui.tool=erase">
+      <summary>Eraser</summary>
+      <div class="row"><label title="Radius on screen, in pixels">Size</label><input type="range" min="2" max="80" step="1" data-bind="ui.eraseSize"><output></output></div>
+      <div class="row"><label title="Off: only lines on the active layer are cut">All layers</label><input type="checkbox" data-bind="ui.eraseAll"></div>
+      <p class="hint">Cuts lines where it touches them, through any symmetric copy; the pieces stay editable. Fills are left alone.</p>
+    </details>
+    <details open id="shapeSection" data-show="ui.tool=shape">
+      <summary>Shape</summary>
+      <div class="row"><label>Shape</label>
+        <select data-bind="ui.shape"><option value="line">Line</option><option value="rect">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Polygon</option><option value="star">Star</option><option value="spiral">Spiral</option><option value="arc">Arc</option></select></div>
+      <div class="row" data-show="ui.shape=polygon|star"><label>Sides</label><input type="range" min="3" max="24" step="1" data-bind="ui.shapeSides"><output></output></div>
+      <div class="row" data-show="ui.shape=star"><label title="Inner radius as a fraction of the outer">Inner</label><input type="range" min="0.05" max="0.95" step="0.01" data-bind="ui.shapeInner"><output></output></div>
+      <div class="row" data-show="ui.shape=spiral"><label>Turns</label><input type="range" min="0.5" max="12" step="0.25" data-bind="ui.shapeTurns"><output></output></div>
+      <div class="row" data-show="ui.shape=arc"><label>Sweep°</label><input type="range" min="10" max="350" step="5" data-bind="ui.shapeSweep"><output></output></div>
+      <p class="hint">Drag to draw. Shift: circle, square or 15° steps · Alt: from the centre. Shapes use the current brush and symmetry and edit like any stroke.</p>
+    </details>
+    <details open id="lassoSection" data-show="ui.tool=lasso">
+      <summary>Lasso</summary>
+      <div class="row"><label>Mode</label><select data-bind="ui.lassoMode"><option value="select">Select strokes</option><option value="fill">Fill the loop</option></select></div>
+      <p class="hint" data-show="ui.lassoMode=select">Selects every stroke with a copy inside the loop (Shift adds).</p>
+      <p class="hint" data-show="ui.lassoMode=fill">Fills the loop with the Bucket's fill and symmetry settings, under the layer's lines.</p>
+    </details>
     <details open id="bucketSection" data-show="ui.tool=bucket">
       <summary>Bucket <span class="hint">(fill tool)</span></summary>
       <div class="row"><label>Fill</label>
@@ -377,6 +403,22 @@
           <option value="2480x3508">A4 portrait @300</option>
         </select></div>
     </details>
+    <details open id="refSection">
+      <summary>Reference picture <span class="hint">(to trace; never exported)</span></summary>
+      <div class="btns">
+        <button data-act="refLoad" title="Load a photo or sketch to trace over">Load picture…</button>
+        <button data-act="refFit" title="Centre it and fit it to the artboard">Fit</button>
+        <button data-act="refRemove" class="danger">Remove</button>
+      </div>
+      <div class="row" data-show="ref.visible=true|false"><label>Show</label><input type="checkbox" data-bind="ref.visible"></div>
+      <div class="row" data-show="ref.visible=true|false"><label title="Over the drawing instead of under it">Above drawing</label><input type="checkbox" data-bind="ref.above"></div>
+      <div class="row" data-show="ref.visible=true|false"><label>Opacity</label><input type="range" min="0" max="1" step="0.01" data-bind="ref.opacity"><output></output></div>
+      <div class="row" data-show="ref.visible=true|false"><label>Size</label><input type="range" min="0.1" max="4" step="0.01" data-bind="ref.scale"><output></output></div>
+      <div class="row" data-show="ref.visible=true|false"><label>Rotate°</label><input type="range" min="-180" max="180" step="1" data-bind="ref.rot"><output></output></div>
+      <div class="row" data-show="ref.visible=true|false"><label>Across</label><input type="range" min="-0.5" max="1.5" step="0.005" data-bind="ref.fx"><output></output></div>
+      <div class="row" data-show="ref.visible=true|false"><label>Down</label><input type="range" min="-0.5" max="1.5" step="0.005" data-bind="ref.fy"><output></output></div>
+      <div class="row"><label title="Off: saved files keep the placement but not the picture (smaller files)">Save with drawing</label><input type="checkbox" data-bind="ui.refSave"></div>
+    </details>
 
     <details open id="selSection">
       <summary>Selection</summary>
@@ -397,6 +439,13 @@
         <button data-act="xfRotate" title="Rotate a quarter turn about its centre (selection, or everything)">Rotate 90°</button>
       </div>
       <p class="hint">In Edit, drag the orange box corners to scale (Alt: from the opposite corner) and the knob to rotate (Shift: 15° steps). Widths, symmetry, recursion and warp scale with it.</p>
+      <div class="row"><label title="Parallel copies on each side">Echoes</label><input type="range" min="1" max="8" step="1" data-bind="ui.echoN"><output></output></div>
+      <div class="row"><label title="Distance between echoes, in stroke widths">Spacing</label><input type="range" min="0.6" max="6" step="0.1" data-bind="ui.echoGap"><output></output></div>
+      <div class="row"><label>Side</label><select data-bind="ui.echoSide"><option value="both">Both sides</option><option value="left">Left / outside</option><option value="right">Right / inside</option></select></div>
+      <div class="btns">
+        <button data-act="echo" title="Parallel lines following each selected stroke (the zentangle aura)">Echo lines</button>
+        <button data-act="fillInside" title="Fill each selected closed shape with the Bucket's fill, under its line">Fill inside</button>
+      </div>
       <div class="row"><label>Move to layer</label><select id="moveLayer"></select></div>
       <p class="hint" id="selInfo"></p>
     </details>
