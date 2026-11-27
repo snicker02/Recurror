@@ -33,6 +33,7 @@ engine/
   noise.js          seeded value noise for brush jitter and wobble
   tabs.js           phone layout: panel sections as tabs under the drawing
   grid.js           drawing grid: overlay drawing and snap targets
+  importtext.js     document from pasted text (repairs chat / notes damage)
   overlay.js        2D overlay: guides, selection, handles, width rings, marquee, snap marker
   document.js       document model (layers, groups), v1 migration, history
 ```
@@ -72,6 +73,10 @@ Copies smaller than about a pixel, or far off the artboard, are culled before dr
 In **Edit**, the selection gets an orange box around everything it draws, copies included. Drag a **corner** to scale it about the box centre (hold **Alt** to scale from the opposite corner). Drag the **round knob** above it to rotate (hold **Shift** for 15° steps). The **Selection** panel has **Fit to artboard** (scale and centre to fill 90% of the page), **Enlarge** (×1.25), **Shrink** (×0.8) and **Rotate 90°**; with nothing selected they act on the whole drawing. Everything that shapes the copies goes with the strokes: symmetry centre and angle, wallpaper tile, frieze repeat, hyperbolic disc, inversion circles, recursion offset and angle, warp scale, and the stroke's lengths (width, dashes, jitter, ink, wet spread, pattern scale), so the drawing looks the same, only bigger, smaller or turned. Wallpaper lattices have no orientation and some warps (waves, sinusoidal, cylinder, horseshoe, power) aren't rotation-symmetric, so those can be scaled but not rotated.
 
 **Deleting a point:** in Edit, right-click it or Alt-click it; on a touch screen, long-press it. A stroke keeps at least two points.
+
+## Importing a document as text
+
+**Open** loads a saved `.json` file. To load a document you have as *text* (copied from a chat, a note or an editor), click **Import text** in the top bar and paste it, or just press **Ctrl/Cmd+V** with the text on the clipboard. The dialog shows what it found and repairs what chats and notes do to pasted text: backticks around values, code fences, curly quotes, non-breaking spaces, markdown escapes, trailing commas, and words before or after the JSON. **Replace drawing** loads it like Open. **Add to drawing** brings its layers in as new layers above the active one (one undo removes them). A copied set of strokes pastes into the active layer.
 
 ## Drawing grid
 
@@ -231,6 +236,7 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 
 ## Changelog
 
+- **2.18.0**: **Import text** in the top bar. Paste a document as text and choose Replace drawing or Add to drawing (as new layers, undoable). Chat and notes damage is cleaned up automatically (backticks, code fences, curly quotes, text around the JSON). Pressing Ctrl/Cmd+V with document text on the clipboard opens it too.
 - **2.17.2**: Knots with mirror symmetry. A strand crossing its own mirror image on a mirror line now weaves cleanly: one strand fully over, the other under, with no seam or stepped edges. Reflected copies show the weave from below (heights swapped), as in classic mirror-symmetric Celtic knots, so every crossing alternates.
 - **2.17.1**: Clean sharp corners. A polyline corner sharper than 20° is now two straight legs meeting exactly on the bisector, with a true miter tip, so no ink notch, edge-shading seam or folded inner edge shows. Where a stroke overlaps itself (tight loops), the part nearer its centre line wins per pixel, so the overlap reads as one shape (EXT_frag_depth; without it, as before).
 - **2.17.0**: **⇄ Shelf** in the top bar sends the artboard to other snicker02 apps (shared image shelf).

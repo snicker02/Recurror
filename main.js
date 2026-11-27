@@ -3,6 +3,7 @@ import { initPanelTabs } from './engine/tabs.js';
 import { floodRegion, traceRegion, keyhole } from './engine/bucket.js';
 import { Renderer } from './engine/renderer.js';
 import { drawOverlay, viewPoint, xformHandles } from './engine/overlay.js';
+import { parseDocText, looksLikeDocText } from './engine/importtext.js';
 import { similarity, transformStroke, transformPlacement, canRotate, snapshot, restore as restoreStroke } from './engine/transform.js';
 import {
   newDocument, makeStroke, touch, normaliseDoc, serialise, History,
@@ -15,7 +16,7 @@ import { getSamples, isClosed, boundCircle } from './engine/geometry.js';
 import { guidesCached, snapTo } from './engine/guides.js';
 import { gridOf, gridSnapTargets } from './engine/grid.js';
 
-export const VERSION = '2.17.2';
+export const VERSION = '2.18.0';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -1340,6 +1341,84 @@ const stamp = () => new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
+/** Bring another document's layers (and strokes, groups, images) into this one, as new layers. */
+function mergeDoc(d) {
+  const lmap = new Map(), gmap = new Map();
+  const at = doc.layers.indexOf(activeLayer()) + 1;
+  const added = d.layers.map((L) => {
+    const n = Object.assign(clone(L), { id: newId('L'), name: L.name + ' (imported)', locked: false });
+    lmap.set(L.id, n.id);
+    return n;
+  });
+  doc.layers.splice(at, 0, ...added);
+  for (const g of d.groups) { const n = Object.assign(clone(g), { id: newId('g') }); doc.groups.push(n); gmap.set(g.id, n.id); }
+  doc.assets = doc.assets || {};
+  for (const [k, v] of Object.entries(d.assets || {})) if (!(k in doc.assets)) doc.assets[k] = v;
+  const strokes = d.strokes.map((s) => Object.assign(s, { id: newId(), rev: nextRev(), layer: lmap.get(s.layer) || added[0].id, group: s.group ? gmap.get(s.group) || null : null }));
+  doc.strokes.push(...strokes);
+  doc.activeLayer = added[added.length - 1].id;
+  setSelection([], null);
+  commit(); refreshPanel(); renderLayers(); dirty = true;
+  return { layers: added.length, strokes: strokes.length };
+}
+
+/**
+ * Import a document from text: a box to paste into (prefilled when it came from a paste),
+ * repaired for chat damage, then either replacing the drawing or added to it as new layers.
+ */
+function importTextDialog(prefill = '') {
+  const ta = Object.assign(document.createElement('textarea'), {
+    id: 'importText', value: prefill, spellcheck: false, rows: 10,
+    placeholder: 'Paste a Recurror document here: the text of a saved .json file, or one shared in a chat or a note.',
+  });
+  const info = para('Text copied from chats and notes is cleaned up automatically (backticks, code fences, curly quotes).');
+  const result = Object.assign(document.createElement('p'), { className: 'importResult' });
+  const check = () => {
+    try {
+      const r = parseDocText(ta.value);
+      const n = r.doc.strokes.length;
+      result.textContent = `${r.kind === 'doc' ? 'Drawing' : 'Strokes'} with ${n} stroke${n === 1 ? '' : 's'}` + (r.fixes.length ? ` · fixed: ${r.fixes.join(', ')}` : '') + '.';
+      result.classList.remove('bad');
+      return r;
+    } catch (err) {
+      result.textContent = ta.value.trim() ? err.message : '';
+      result.classList.add('bad');
+      return null;
+    }
+  };
+  ta.addEventListener('input', check);
+  const run = (mode) => {
+    const r = check();
+    if (!r) { if (!ta.value.trim()) { result.textContent = 'Paste the document text first.'; result.classList.add('bad'); } return; }
+    try {
+      if (r.kind === 'strokes') {
+        // a copied stroke set: like Paste, into the active layer
+        clipboard = { strokes: r.doc.strokes, groups: r.doc.groups || [] };
+        $('#modal').hidden = true;
+        actions.paste();
+        return;
+      }
+      const d = normaliseDoc(r.doc);
+      $('#modal').hidden = true;
+      if (mode === 'replace') {
+        tpl.sym.cx = d.width / 2; tpl.sym.cy = d.height / 2;
+        loadDoc(d);
+        flashHint(`Imported a drawing with ${d.strokes.length} stroke${d.strokes.length === 1 ? '' : 's'}.`);
+      } else {
+        const m = mergeDoc(d);
+        flashHint(`Added ${m.strokes} stroke${m.strokes === 1 ? '' : 's'} on ${m.layers} new layer${m.layers === 1 ? '' : 's'} (Ctrl+Z undoes).`);
+      }
+    } catch (err) { result.textContent = 'Could not import: ' + err.message; result.classList.add('bad'); $('#modal').hidden = false; }
+  };
+  dialog('Import text', [info, ta, result], [
+    { label: 'Cancel', value: false },
+    { label: 'Add to drawing', onClick: () => run('add') },
+    { label: 'Replace drawing', cls: 'primary', onClick: () => run('replace') },
+  ]);
+  if (prefill) check();
+  setTimeout(() => { ta.focus(); if (!prefill) ta.select(); }, 0);
+}
+
 function loadDoc(d) {
   doc = d;
   setSelection([], null);
@@ -1355,6 +1434,7 @@ const actions = {
     loadDoc(newDocument(w, h));
   },
   open() { $('#fileInput').click(); },
+  importText() { importTextDialog(); },
   save() { download(new Blob([serialise(doc)], { type: 'application/json' }), `recurror-${stamp()}.json`); },
   async demo() {
     if (doc.strokes.length && !(await ask('Load demo', 'Replace the current drawing with the demo?', 'Replace'))) return;
@@ -1613,6 +1693,18 @@ const actions = {
 };
 
 let clipboard = null;
+let pendingPaste = 0;   // Ctrl+V: the stroke clipboard pastes unless the system clipboard holds a document
+
+// pasting document text anywhere outside a text field opens Import text with it
+document.addEventListener('paste', (e) => {
+  const t = e.target;
+  if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && /^(text|search|url|email|number|)$/i.test(t.type)) || t.isContentEditable)) return;
+  const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+  if (!looksLikeDocText(text)) return;
+  e.preventDefault();
+  if (pendingPaste) { clearTimeout(pendingPaste); pendingPaste = 0; }
+  importTextDialog(text);
+});
 
 /** Copies of strokes for another layer: new ids, and their groups duplicated so the copies stay independent. */
 function freshCopies(src, layerId) {
@@ -1793,7 +1885,7 @@ function onKeyDown(e) {
     else if (k === 'j') { e.preventDefault(); actions.join(); }
     else if (k === 'c') { e.preventDefault(); actions.copy(); }
     else if (k === 'x') { e.preventDefault(); actions.cut(); }
-    else if (k === 'v') { e.preventDefault(); actions.paste(); }
+    else if (k === 'v') { pendingPaste = setTimeout(() => { pendingPaste = 0; actions.paste(); }, 80); }
     return;
   }
   if (tag === 'SELECT') return;

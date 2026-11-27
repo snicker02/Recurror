@@ -164,6 +164,9 @@ body { overflow: hidden; }
 #modal p { color: var(--dim); margin: 4px 0; line-height: 1.45; }
 #modal a.button { text-decoration: none; background: #0c4a6e; border: 1px solid #0369a1; border-radius: 6px; padding: 5px 10px; color: var(--text); text-align: center; }
 #modal .btns { justify-content: flex-end; }
+#modal textarea { width: 100%; box-sizing: border-box; min-height: 160px; max-height: 45vh; resize: vertical; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0b0d12; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 6px 0; }
+#modal p.importResult { color: #86efac; min-height: 1.4em; }
+#modal p.importResult.bad { color: #fca5a5; }
 #modal .btns > * { flex: 0 0 auto; font-size: 13px; padding: 5px 14px; }
 #status .credit { color: #6b7080; border-left: 1px solid var(--line); padding-left: 16px; }
 
