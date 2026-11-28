@@ -344,3 +344,7 @@ The **⇄ Shelf** button opens the image shelf shared by all apps on [snicker02.
 - **Send to ↗** opens another app in a new tab with the image already loaded.
 
 The shelf code lives in [`snicker02.github.io/shared/bridge.js`](https://github.com/snicker02/snicker02.github.io/blob/main/shared/bridge.js). If it can't load (for example when you're offline), the app works as before and the button is hidden.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
