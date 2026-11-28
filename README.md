@@ -332,6 +332,10 @@ Files are saved as JSON with format `recurror-doc`, version 2. Recurror v1 and S
 - **1.1.0**: Consistent overlap ordering for symmetric copies.
 - **1.0.0**: First release, as Strophe.
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
 ---
 
 Created with help from Claude AI
